@@ -307,49 +307,7 @@ class RTPAudioHandler:
 
 
 
-    async def process_rtp_packet(self, packet):
-        """Procesa un paquete RTP y extrae el payload de audio"""
-        try:
-            payload = packet[12:]
-            return payload
-            
-        except IndexError as e:
-            logging.error(f"Error accediendo al payload RTP (paquete muy corto?): {e}")
-            return None
-        except Exception as e:
-            logging.error(f"Error procesando paquete RTP: {e}")
-            return None
 
-    async def detect_speech(self, audio_data):
-        """Detecta presencia de voz en el audio"""
-        try:
-            # Calcular energía del audio
-            energy = np.sqrt(np.mean(audio_data.astype(np.float32) ** 2)) / 32768.0
-            # Detección VAD
-            is_speech = self.vad.is_speech(
-                audio_data.tobytes(),
-                AudioConfig.ASTERISK_SAMPLE_RATE
-            )
-            # logging.debug(f"VAD: {is_speech}, Energía: {energy:.4f}")
-            
-            # Log detallado cada 20 frames (aproximadamente cada 400ms)
-            if hasattr(self, 'frame_counter'):
-                self.frame_counter += 1
-            else:
-                self.frame_counter = 0
-                
-            # if self.frame_counter % 20 == 0:
-            #     logging.debug(
-            #         f"Análisis de voz - Energía: {energy:.4f}, "
-            #         f"Umbral: {AudioConfig.ENERGY_THRESHOLD:.4f}, "
-            #         f"VAD: {is_speech}"
-            #     )
-                
-            return is_speech and energy > AudioConfig.ENERGY_THRESHOLD
-            
-        except Exception as e:
-            logging.error(f"Error en detección de voz: {e}")
-            return False
 
     async def handle_speech_segment(self):
         """
@@ -408,58 +366,6 @@ class RTPAudioHandler:
 
 
 
-    def create_rtp_packet(self, payload, payload_type=0, timestamp=None):
-        """
-        Crea un paquete RTP con el payload y tipo especificados.
-        
-        Args:
-            payload: Audio codificado (numpy array o bytes)
-            payload_type: Tipo de payload RTP (0 para ulaw, 8 para alaw)
-            
-        Returns:
-            bytes: Paquete RTP completo
-        """
-        try:
-            # Primer byte: V=2, P=0, X=0, CC=0 -> 0x80
-            # Segundo byte: M=0, PT=payload_type
-            header = bytearray([
-                0x80,
-                payload_type & 0x7F,  # Aseguramos que el bit M está en 0
-                (self.sequence_number >> 8) & 0xFF,
-                self.sequence_number & 0xFF,
-                (self.timestamp >> 24) & 0xFF,
-                (self.timestamp >> 16) & 0xFF,
-                (self.timestamp >> 8) & 0xFF,
-                self.timestamp & 0xFF,
-                (self.ssrc >> 24) & 0xFF,
-                (self.ssrc >> 16) & 0xFF,
-                (self.ssrc >> 8) & 0xFF,
-                self.ssrc & 0xFF
-            ])
-            
-            # Convertir payload a bytes si es numpy array
-            if isinstance(payload, np.ndarray):
-                payload_bytes = payload.tobytes()
-            else:
-                payload_bytes = bytes(payload)
-                
-            # Crear paquete final
-            packet = bytes(header) + payload_bytes
-            
-            # logging.debug(
-            #     f"Paquete RTP creado - Header: {len(header)} bytes, "
-            #     f"Payload: {len(payload_bytes)} bytes, "
-            #     f"Type: {payload_type}"
-            # )
-            
-            return packet
-            
-        except Exception as e:
-            logging.error(f"Error creando paquete RTP: {e}")
-            logging.exception("Detalles del error:")
-            return None
-
-
     
 
     async def cleanup(self):
@@ -497,7 +403,6 @@ class RTPAudioHandler:
 
 
 
-    # REEMPLAZAR POR ESTE NUEVO MÉTODO:
     async def process_with_openai(self, audio_data):
         """
         Procesa el audio aplicando reducción de ruido y lo envía a OpenAI.
