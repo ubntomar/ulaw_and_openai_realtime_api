@@ -34,7 +34,10 @@ class OpenAIClient:
         self.api_key = os.getenv("OPENAI_API_KEY")
         if not self.api_key:
             logging.error("API Key de OpenAI no configurada")
-        
+        else:
+            logging.info("API Key de OpenAI configurada")
+
+
         self.url = "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-12-17"
         self.headers = [
             "Authorization: Bearer " + self.api_key,
@@ -237,7 +240,12 @@ class OpenAIClient:
 
 def main():
     """Función principal"""
-    logging.info("Iniciando openai_ws.py")
+    logging.info("Iniciando openai_ws.py  recordatorio:python3 openai_ws.py ,  export OPENAI_API_KEY='' , luego ejecutar el comando source ~/.bashrc ")
+    # api_key = os.getenv("OPENAI_API_KEY")
+    # if not api_key:
+    #     logging.error("API Key de OpenAI no configurada")
+    # else:
+    #     logging.info("API Key de OpenAI configurada")
     try:
         input_audio = sys.stdin.buffer.read()
         logging.info(f"Audio leído: {len(input_audio)} bytes")
