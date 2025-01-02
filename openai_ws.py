@@ -7,7 +7,10 @@ import websocket
 import sys
 import time
 import numpy as np
+import wave
 from datetime import datetime
+from audioop import ulaw2lin
+
 
 # Configure logging
 logging.basicConfig(
@@ -97,8 +100,8 @@ class OpenAIClient:
                     "modalities": ["audio", "text"],
                     "voice": "echo",
                     "instructions": "Contesta mis preguntas",
-                    "input_audio_format": "g711_ulaw",
-                    "output_audio_format": "g711_ulaw",         
+                    "input_audio_format": "pcm16",
+                    "output_audio_format": "pcm16",         
                     "turn_detection": None
                 }    
             }
@@ -187,19 +190,30 @@ class OpenAIClient:
         except Exception as e:
             logging.error(f"Error enviando chunk: {e}")
 
+    # def ulaw_to_pcm(self, ulaw_data):
+    #     """Convierte datos de audio uLaw a PCM"""
+    #     # Decodifica desde u-law (bytes) a lineal de 16 bits (bytes)
+    #     linear_bytes = ulaw2lin(ulaw_data, 2)
+    #     # Convierte esos bytes en un array NumPy de int16
+    #     return np.frombuffer(linear_bytes, dtype=np.int16)
+    
+    
     def handle_audio_delta(self, data):
         """Procesa chunks de audio recibidos"""
         try:
-            audio_data = base64.b64decode(data['delta'])
-            self.audio_chunks.append(audio_data)
+            audio_buffer = base64.b64decode(data['delta'])
             
-            self.metrics['chunks_received'] += 1
-            self.metrics['total_bytes_received'] += len(audio_data)
+            # Agregar el chunk de audio a la lista
+            self.audio_chunks.append(audio_buffer)
+
             
-            logging.debug(
-                f"Audio recibido: {len(audio_data)} bytes "
-                f"(Total: {self.metrics['total_bytes_received']})"
-            )
+            # self.metrics['chunks_received'] += 1
+            # self.metrics['total_bytes_received'] += len(audio_data)
+            
+            # logging.debug(
+            #     f"Audio recibido: {len(audio_data)} bytes "
+            #     f"(Total: {self.metrics['total_bytes_received']})"
+            # )
             
         except Exception as e:
             logging.error(f"Error procesando audio delta: {e}")
@@ -207,19 +221,28 @@ class OpenAIClient:
     def handle_response_done(self, ws):
         """Maneja la finalización de la respuesta de OpenAI"""
         try:
-            # 1. Unimos todos los chunks de audio recibidos
-            final_audio = b''.join(self.audio_chunks)
+            # Concatenar todos los chunks de audio en uno solo
+            combined_audio = np.concatenate(self.audio_chunks)
+            # Configurar los parámetros del archivo WAV
+            num_channels = 1    # Número de canales (mono)
+            sampwidth = 2        # Ancho de muestra en bytes (16 bits)
+            num_frames = combined_audio.shape[0]  # Número de frames
+            with wave.open("/tmp/shared_openai/audio.wav", 'w') as wf:
+                wf.setnchannels(num_channels)
+                wf.setsampwidth(sampwidth)
+                wf.setframerate(8000)
+                wf.writeframes(combined_audio.tobytes())
+            logging.info(f"Audio guardado en: /tmp/shared_openai/audio.wav")
+
+            # # 3. Enviamos el audio completo como respuesta
+            # sys.stdout.buffer.write(final_audio)
             
-            # 2. Registramos métricas y estadísticas
-            self.metrics['processing_time'] = time.time() - self.metrics['start_time']
-            logging.info(f"Audio final recibido: {len(final_audio)} bytes")
+            # # 4. Cerramos la conexión WebSocket
+            # ws.close()
+
             
-            # 3. Enviamos el audio completo como respuesta
-            sys.stdout.buffer.write(final_audio)
-            
-            # 4. Cerramos la conexión WebSocket
-            ws.close()
-            
+
+
         except Exception as e:
             logging.error(f"Error procesando respuesta final: {e}")
 
@@ -241,11 +264,15 @@ class OpenAIClient:
 def main():
     """Función principal"""
     logging.info("Iniciando openai_ws.py  recordatorio:python3 openai_ws.py ,  export OPENAI_API_KEY='' , luego ejecutar el comando source ~/.bashrc ")
+    
+    
     # api_key = os.getenv("OPENAI_API_KEY")
     # if not api_key:
     #     logging.error("API Key de OpenAI no configurada")
     # else:
     #     logging.info("API Key de OpenAI configurada")
+    
+    
     try:
         input_audio = sys.stdin.buffer.read()
         logging.info(f"Audio leído: {len(input_audio)} bytes")

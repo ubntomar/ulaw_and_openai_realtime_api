@@ -18,6 +18,9 @@ import aiohttp
 import wave
 from collections import deque
 import time
+from audioop import ulaw2lin
+
+
 
 
 #Configuración de logging principal para handle_call.py ..
@@ -239,23 +242,19 @@ class RTPAudioHandler:
                     logging.warning(f"Tamaño de frame inconsistente: {len(payload)} vs {frame_size}")
                     continue
 
-                # Detectar y limpiar silencio en el frame (threshold 0xFC = 252)
-                silence_count = sum(1 for byte in payload if byte >= 0xFC)
-                if silence_count / len(payload) > 0.9:  # Si 90% del frame es silencio
-                    payload = bytes([0xFF] * len(payload))  # Reemplazar con silencio puro
-                else:
-                    # Limpiar ruido cercano al silencio
-                    payload = bytes(0xFF if byte >= 0xFC else byte for byte in payload)
-
+                
                 # Almacenar frame ordenado
                 ordered_frames[sequence_number] = payload
                 
                 # Procesar cuando tengamos suficientes frames
-                if len(ordered_frames) >= 300:
+                frame_cont=300
+                if len(ordered_frames) >= frame_cont:
                     # Ordenar frames por número de secuencia
                     ordered_numbers = sorted(ordered_frames.keys())
-                    self.audio_buffer = [ordered_frames[seq] for seq in ordered_numbers[:100]]
-                    logging.info(f"************************300 frames recolectados y ordenados correctamente********************************************************")
+                    self.audio_buffer = [ordered_frames[seq] for seq in ordered_numbers[:frame_cont]]
+                    logging.info(f"************************ {frame_cont} frames recolectados y ordenados correctamente********************************************************")
+                    logging.info(f"******************************************************************TERMINA bucle de procesamiento de audio *********")
+
                     await self.handle_speech_segment()
                     self.running = False
 
@@ -405,48 +404,22 @@ class RTPAudioHandler:
 
     async def process_with_openai(self, audio_data):
         """
-        Procesa el audio aplicando reducción de ruido y lo envía a OpenAI.
+        Procesa el audio y lo envía a OpenAI.
         Args:
             audio_data: Lista de payloads de audio en formato uLaw
         Returns:
             bytes: Respuesta de OpenAI
         """
         try:
-            # Constantes para reducción de ruido
-            NOISE_FLOOR = 50
-            VOICE_MULTIPLIER = 1.2
             
-            # Procesar cada frame individualmente
-            processed_frames = []
-            for i, frame in enumerate(audio_data):
-                frame_array = np.frombuffer(frame, dtype=np.int8)
-                frame_rms = np.sqrt(np.mean(frame_array.astype(float)**2))
-                
-                # Logging cada 10 frames para debug
-                if i % 10 == 0:
-                    logging.info(f"Frame {i} - RMS: {frame_rms:.2f}, Umbral: {NOISE_FLOOR * VOICE_MULTIPLIER}")
-                
-                # Umbral para reducción de ruido
-                if frame_rms < NOISE_FLOOR:
-                    processed_frames.append(bytes([0xFE] * len(frame)))
-                else:
-                    processed_frames.append(frame)
-
-            # Combinar frames procesados
-            combined_audio = b''.join(processed_frames)
+            # 1. Concatenar todos los payloads en un solo array de bytes
+            ulaw_bytes = b''.join(audio_data)    
+            # 2. Convertir los bytes µ-law a un array de NumPy (8 bits)
+            ulaw_data = np.frombuffer(ulaw_bytes, dtype=np.uint8)
+            # Decodifica desde u-law (bytes) a lineal de 16 bits (bytes)
+            pcm16_data = ulaw2lin(ulaw_data, 2)
             
-            # # Log de información del audio procesado
-            # total_samples = len(combined_audio)
-            # duration_ms = (total_samples * 1000) / AudioConfig.ASTERISK_SAMPLE_RATE
-            # logging.info(f"Audio procesado - Duración: {duration_ms:.2f} ms, Tamaño: {total_samples} bytes")
 
-            # # Guardar audio procesado
-            # wav_path = "/tmp/shared_openai/audio_8k_ulaw.wav"
-            # with wave.open(wav_path, 'wb') as wav_file:
-            #     wav_file.setnchannels(1)
-            #     wav_file.setsampwidth(1)
-            #     wav_file.setframerate(AudioConfig.ASTERISK_SAMPLE_RATE)
-            #     wav_file.writeframes(combined_audio)
 
             # Enviar audio procesado a OpenAI
             logging.info("|||||||||||||||||||||||||||Enviando audio procesado a OpenAI...")
@@ -459,7 +432,7 @@ class RTPAudioHandler:
             
             try:
                 stdout, stderr = await asyncio.wait_for(
-                    process.communicate(combined_audio),
+                    process.communicate(pcm16_data),
                     timeout=20.0
                 )
                 
