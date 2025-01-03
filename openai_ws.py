@@ -27,7 +27,7 @@ logging.basicConfig(
 
 class AudioConfig:
     """Configuración de audio para OpenAI"""
-    CHUNK_SIZE = 8192           # Tamaño del chunk para envío
+    CHUNK_SIZE = 1600           # Tamaño del chunk para envío
     MAX_AUDIO_SIZE = 10 * 1024 * 1024  # 10MB límite de OpenAI
     FRAME_DURATION_MS = 20      # Duración de frame en ms
 
@@ -100,7 +100,7 @@ class OpenAIClient:
                     "modalities": ["audio", "text"],
                     "voice": "echo",
                     "instructions": "Contesta mis preguntas",
-                    "input_audio_format": "pcm16",
+                    "input_audio_format": "g711_ulaw",
                     "output_audio_format": "pcm16",         
                     "turn_detection": None
                 }    
@@ -129,7 +129,7 @@ class OpenAIClient:
             elif msg_type == 'response.done':
                 logging.info("Respuesta final recibida response.done")
                 logging.debug(message)
-                self.handle_response_done(ws)
+                # self.handle_response_done(ws)
             elif msg_type == 'response.audio_transcript.done':
                 logging.info(f"Transcripción: {data.get('transcript', '')}")    
             elif msg_type == 'response.input_audio_buffer.speech_started':
@@ -202,49 +202,21 @@ class OpenAIClient:
         """Procesa chunks de audio recibidos"""
         try:
             audio_buffer = base64.b64decode(data['delta'])
-            
             # Agregar el chunk de audio a la lista
             self.audio_chunks.append(audio_buffer)
-
-            
-            # self.metrics['chunks_received'] += 1
-            # self.metrics['total_bytes_received'] += len(audio_data)
-            
-            # logging.debug(
-            #     f"Audio recibido: {len(audio_data)} bytes "
-            #     f"(Total: {self.metrics['total_bytes_received']})"
-            # )
-            
+            self.metrics['chunks_received'] += 1
+            self.metrics['total_bytes_received'] += len(audio_buffer)
+            logging.debug(
+                f"Chunks audio recibido: {len(audio_buffer)} bytes "
+                f"(Acumulado: {self.metrics['total_bytes_received']})"
+            )
         except Exception as e:
             logging.error(f"Error procesando audio delta: {e}")
 
-    def handle_response_done(self, ws):
-        """Maneja la finalización de la respuesta de OpenAI"""
-        try:
-            # Concatenar todos los chunks de audio en uno solo
-            combined_audio = np.concatenate(self.audio_chunks)
-            # Configurar los parámetros del archivo WAV
-            num_channels = 1    # Número de canales (mono)
-            sampwidth = 2        # Ancho de muestra en bytes (16 bits)
-            num_frames = combined_audio.shape[0]  # Número de frames
-            with wave.open("/tmp/shared_openai/audio.wav", 'w') as wf:
-                wf.setnchannels(num_channels)
-                wf.setsampwidth(sampwidth)
-                wf.setframerate(8000)
-                wf.writeframes(combined_audio.tobytes())
-            logging.info(f"Audio guardado en: /tmp/shared_openai/audio.wav")
-
-            # # 3. Enviamos el audio completo como respuesta
-            # sys.stdout.buffer.write(final_audio)
-            
-            # # 4. Cerramos la conexión WebSocket
-            # ws.close()
-
+    
+    
             
 
-
-        except Exception as e:
-            logging.error(f"Error procesando respuesta final: {e}")
 
     def handle_error(self, data):
         """Procesa errores de OpenAI"""
@@ -263,14 +235,14 @@ class OpenAIClient:
 
 def main():
     """Función principal"""
-    logging.info("Iniciando openai_ws.py  recordatorio:python3 openai_ws.py ,  export OPENAI_API_KEY='' , luego ejecutar el comando source ~/.bashrc ")
+    logging.info("Iniciando openai_ws.py  recordatorio:python3 openai_ws.py ,  export OPENAI_API_KEY='' , luego ejecutar el comando: source ~/.bashrc ")
     
     
-    # api_key = os.getenv("OPENAI_API_KEY")
-    # if not api_key:
-    #     logging.error("API Key de OpenAI no configurada")
-    # else:
-    #     logging.info("API Key de OpenAI configurada")
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        logging.error("API Key de OpenAI no configurada")
+    else:
+        logging.info("API Key de OpenAI configurada")
     
     
     try:

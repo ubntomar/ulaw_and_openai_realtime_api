@@ -247,7 +247,7 @@ class RTPAudioHandler:
                 ordered_frames[sequence_number] = payload
                 
                 # Procesar cuando tengamos suficientes frames
-                frame_cont=300
+                frame_cont=200
                 if len(ordered_frames) >= frame_cont:
                     # Ordenar frames por número de secuencia
                     ordered_numbers = sorted(ordered_frames.keys())
@@ -414,10 +414,10 @@ class RTPAudioHandler:
             
             # 1. Concatenar todos los payloads en un solo array de bytes
             ulaw_bytes = b''.join(audio_data)    
-            # 2. Convertir los bytes µ-law a un array de NumPy (8 bits)
-            ulaw_data = np.frombuffer(ulaw_bytes, dtype=np.uint8)
-            # Decodifica desde u-law (bytes) a lineal de 16 bits (bytes)
-            pcm16_data = ulaw2lin(ulaw_data, 2)
+            # # 2. Convertir los bytes µ-law a un array de NumPy (8 bits)
+            # ulaw_data = np.frombuffer(ulaw_bytes, dtype=np.uint8)
+            # # Decodifica desde u-law (bytes) a lineal de 16 bits (bytes)
+            # pcm16_data = ulaw2lin(ulaw_data, 2)
             
 
 
@@ -432,7 +432,7 @@ class RTPAudioHandler:
             
             try:
                 stdout, stderr = await asyncio.wait_for(
-                    process.communicate(pcm16_data),
+                    process.communicate(ulaw_bytes),
                     timeout=20.0
                 )
                 
