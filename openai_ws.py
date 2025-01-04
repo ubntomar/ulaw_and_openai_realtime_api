@@ -31,6 +31,9 @@ class AudioConfig:
     MAX_AUDIO_SIZE = 10 * 1024 * 1024  # 10MB límite de OpenAI
     FRAME_DURATION_MS = 20      # Duración de frame en ms
 
+
+
+
 class OpenAIClient:
     def __init__(self):
         
@@ -58,19 +61,12 @@ class OpenAIClient:
             'processing_time': 0
         }
 
-    def start(self, input_audio):
+    def start(self):
         """Inicia el procesamiento con OpenAI"""
         try:
             self.metrics['start_time'] = time.time()
 
-            self.input_audio = input_audio
             
-            logging.info(f"Audio recibido: {len(input_audio)} bytes")
-            
-            # Validar tamaño del audio
-            if len(input_audio) > AudioConfig.MAX_AUDIO_SIZE:
-                logging.error(f"Audio demasiado grande: {len(input_audio)} bytes")
-                return None
             
             # Configurar y ejecutar WebSocket
             ws = websocket.WebSocketApp(
@@ -101,7 +97,7 @@ class OpenAIClient:
                     "voice": "echo",
                     "instructions": "Contesta mis preguntas",
                     "input_audio_format": "g711_ulaw",
-                    "output_audio_format": "pcm16",         
+                    "output_audio_format": "g711_ulaw",         
                     "turn_detection": None
                 }    
             }
@@ -122,19 +118,13 @@ class OpenAIClient:
                 
             elif msg_type == 'session.updated':
                 logging.info("msg_type updated recibido, ahora enviaré audio chunks")
-                logging.debug(message)
                 self.handle_session_updated(ws)
             elif msg_type == 'response.audio.delta':
                 self.handle_audio_delta(data)
             elif msg_type == 'response.done':
                 logging.info("Respuesta final recibida response.done")
-                logging.debug(message)
-                # self.handle_response_done(ws)
             elif msg_type == 'response.audio_transcript.done':
                 logging.info(f"Transcripción: {data.get('transcript', '')}")    
-            elif msg_type == 'response.input_audio_buffer.speech_started':
-                logging.info("Inicio de habla detectado speech_started")
-                logging.debug(data)
             elif msg_type == 'error':
                 self.handle_error(data)
             
@@ -197,7 +187,6 @@ class OpenAIClient:
     #     # Convierte esos bytes en un array NumPy de int16
     #     return np.frombuffer(linear_bytes, dtype=np.int16)
     
-    
     def handle_audio_delta(self, data):
         """Procesa chunks de audio recibidos"""
         try:
@@ -212,11 +201,6 @@ class OpenAIClient:
             )
         except Exception as e:
             logging.error(f"Error procesando audio delta: {e}")
-
-    
-    
-            
-
 
     def handle_error(self, data):
         """Procesa errores de OpenAI"""
@@ -233,6 +217,9 @@ class OpenAIClient:
             f"Conexión cerrada: {close_status_code} - {close_msg}"
         )
 
+
+
+
 def main():
     """Función principal"""
     logging.info("Iniciando openai_ws.py  recordatorio:python3 openai_ws.py ,  export OPENAI_API_KEY='' , luego ejecutar el comando: source ~/.bashrc ")
@@ -247,15 +234,14 @@ def main():
     
     try:
         input_audio = sys.stdin.buffer.read()
-        logging.info(f"Audio leído: {len(input_audio)} bytes")
+        client = OpenAIClient()
         if input_audio == b'':
             logging.error("No se recibió audio")
             sys.exit(1)
         else:
             logging.info("Audio recibido con éxito")    
-            client = OpenAIClient()
             logging.info("Iniciando WebSocket dentro de openai_ws.py")  
-            result = client.start(input_audio)
+            result = client.start()
             if result is None:
                 logging.error("Error al procesar audio")
                 sys.exit(1)

@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 import subprocess
 import sys
-sys.path.append('/usr/local/bin')
-from openai_ws import OpenAIClient
 import socket
 import os
 import json
 import logging
 import asyncio
+import threading
 import websockets
 import numpy as np
 import webrtcvad
@@ -19,9 +18,8 @@ import wave
 from collections import deque
 import time
 from audioop import ulaw2lin
-
-
-
+import websocket
+import base64
 
 #Configuración de logging principal para handle_call.py ..
 logging.basicConfig(
@@ -66,7 +64,6 @@ class RTPAudioHandler:
         self.remote_port = None
         self.remote_configured = False  # Nuevo flag para tracking de endpoint remoto
 
-
     async def find_available_port(self, local_address):
         """
         Encuentra un puerto disponible dentro del rango RTP configurado
@@ -87,8 +84,6 @@ class RTPAudioHandler:
         except Exception as e:
             logging.error(f"Error buscando puerto disponible: {e}")
             raise
-
-
 
     async def start(self, local_address, local_port, remote_address=None, remote_port=None, codec='ulaw'):
         """
@@ -161,7 +156,6 @@ class RTPAudioHandler:
                 self.socket = None
             return False   
 
-
     async def process_audio_stream(self, local_address  , codec='ulaw'):
         """Maneja el flujo principal de audio RTP"""
         try:
@@ -193,9 +187,6 @@ class RTPAudioHandler:
             logging.info("Finalizando stream de audio")
             await self.cleanup()
 
-
-
-
     async def process_audio(self):
         """Procesa el audio RTP entrante"""
         loop = asyncio.get_event_loop()
@@ -206,62 +197,67 @@ class RTPAudioHandler:
         
         logging.info(f"******************************************************************Iniciando bucle de procesamiento de audio en socket {self.socket.getsockname()}**********")
         
-        while self.running:
-            try:
-                current_time = time.time()
-                if current_time - last_log_time >= 5:
-                    logging.info(
-                        f"Estado del procesamiento - Frames: {frames_processed}, "
-                        f"Buffer: {len(ordered_frames)}"
-                    )
-                    last_log_time = current_time
-                
+        openai_client = OpenAIClient()
+        try:
+           openai_client.start_in_thread()
+        except Exception as e:
+            logging.error(f"Error en openai_client: {e}")
+            return False
+
+        except Exception as e:
+            logging.error(f"Error en openai_client: {e}")
+            return False
+        try:
+            openai_handler = OpenAIHandler()
+            receive_task = asyncio.create_task(openai_handler.receive_response(openai_client))
+        
+
+            while True:
                 try:
-                    data = await asyncio.wait_for(
-                        loop.sock_recv(self.socket, 1024),
-                        timeout=0.5
-                    )
-                    frames_processed += 1
-                except asyncio.TimeoutError:
-                    continue
+                    current_time = time.time()
+                    if current_time - last_log_time >= 5:
+                        logging.info(
+                            f"Estado del procesamiento - Frames: {frames_processed} "
+                        )
+                        last_log_time = current_time
                     
-                if not data:
-                    logging.debug("Frame RTP vacío")
+                    try:
+                        data = await asyncio.wait_for(
+                            loop.sock_recv(self.socket, 1024)
+                        )
+                        frames_processed += 1
+                    except asyncio.TimeoutError:
+                        continue
+                        
+                    if not data:
+                        logging.debug("Frame RTP vacío")
+                        continue
+
+                    # Procesar cabecera RTP y obtener payload
+                    payload, sequence_number = self.parse_rtp_header(data)
+                    if payload is None or sequence_number is None:
+                        logging.warning("Frame RTP inválido")
+                        continue
+
+                    # Validar consistencia del tamaño de frame
+                    if frame_size is None:
+                        frame_size = len(payload)
+                    elif len(payload) != frame_size:
+                        logging.warning(f"Tamaño de frame inconsistente: {len(payload)} vs {frame_size}")
+                        continue
+                    
+                    openai_client.pyload_to_openai(payload)
+
+                except Exception as e:
+                    logging.error(f"Error en process_audio: {e}")
                     continue
-
-                # Procesar cabecera RTP y obtener payload
-                payload, sequence_number = self.parse_rtp_header(data)
-                if payload is None or sequence_number is None:
-                    logging.warning("Frame RTP inválido")
-                    continue
-
-                # Validar consistencia del tamaño de frame
-                if frame_size is None:
-                    frame_size = len(payload)
-                elif len(payload) != frame_size:
-                    logging.warning(f"Tamaño de frame inconsistente: {len(payload)} vs {frame_size}")
-                    continue
-
-                
-                # Almacenar frame ordenado
-                ordered_frames[sequence_number] = payload
-                
-                # Procesar cuando tengamos suficientes frames
-                frame_cont=200
-                if len(ordered_frames) >= frame_cont:
-                    # Ordenar frames por número de secuencia
-                    ordered_numbers = sorted(ordered_frames.keys())
-                    self.audio_buffer = [ordered_frames[seq] for seq in ordered_numbers[:frame_cont]]
-                    logging.info(f"************************ {frame_cont} frames recolectados y ordenados correctamente********************************************************")
-                    logging.info(f"******************************************************************TERMINA bucle de procesamiento de audio *********")
-
-                    await self.handle_speech_segment()
-                    self.running = False
-
-            except Exception as e:
-                logging.error(f"Error en process_audio: {e}")
-                continue
-
+        
+        
+        except asyncio.CancelledError:
+            logging.info("Llamada finalizada.")
+        finally:
+            await openai_handler.close_openai_stream()
+            receive_task.cancel()  # Cancelar recepción            
 
 
 
@@ -303,68 +299,6 @@ class RTPAudioHandler:
 
         return payload, sequence_number
 
-
-
-
-
-
-    async def handle_speech_segment(self):
-        """
-        Procesa un segmento completo de voz con manejo robusto de errores y métricas.
-        """
-        start_time = time.time()
-        segment_id = f"segment_{int(start_time * 1000)}"
-        
-        try:
-            # 1. Validación inicial del buffer
-            if not self.audio_buffer:
-                logging.debug(f"[{segment_id}] Buffer de audio vacío - ignorando segmento")
-                return
-
-            # # 2. Unión y análisis inicial del audio
-            # try:
-            complete_audio = self.audio_buffer
-            
-
-            # 4. Procesamiento con OpenAI
-            try:
-
-                logging.info(f"[{segment_id}] Enviando <<<<<<<<<<<***********************>>>>>>>>>>>> {len(complete_audio)} muestras a OpenAI")
-                response = await self.process_with_openai(complete_audio)
-                
-                if response is None:
-                    logging.error(f"[{segment_id}] No se recibió respuesta de OpenAI")
-                    return
-                    
-                if len(response) == 0:
-                    logging.warning(f"[{segment_id}] Respuesta de OpenAI vacía")
-                    return
-
-                logging.info(
-                    f"[{segment_id}] Respuesta recibida: "
-                    f"{len(response)} bytes, "
-                    f"duración estimada: {len(response)/32000:.1f}s"
-                )
-
-
-            except Exception as e:
-                logging.error(f"[{segment_id}] Error en comunicación con OpenAI: {e}")
-                return
-
-        except Exception as e:
-            logging.error(f"[{segment_id}] Error general en procesamiento: {e}")
-            logging.exception("Detalles completos del error:")
-        
-        finally:
-            # Asegurar limpieza del buffer incluso en caso de error
-            self.audio_buffer = []
-            self.is_speaking = False
-
-
-
-
-
-
     
 
     async def cleanup(self):
@@ -401,63 +335,213 @@ class RTPAudioHandler:
 
 
 
+class OpenAIClient:
+    def __init__(self):
+        self.api_key = os.getenv("OPENAI_API_KEY")
+        if not self.api_key:
+            logging.error("API Key de OpenAI no configurada")
+        else:
+            logging.info("API Key de OpenAI configurada")
 
-    async def process_with_openai(self, audio_data):
-        """
-        Procesa el audio y lo envía a OpenAI.
-        Args:
-            audio_data: Lista de payloads de audio en formato uLaw
-        Returns:
-            bytes: Respuesta de OpenAI
-        """
+        self.url = "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-12-17"
+        self.headers = [
+            "Authorization: Bearer " + self.api_key,
+            "OpenAI-Beta: realtime=v1"
+        ]
+        self.input_audio = None
+        self.metrics = {
+            'start_time': None,
+            'chunks_sent': 0,
+            'chunks_received': 0,
+            'total_bytes_sent': 0,
+            'total_bytes_received': 0,
+            'processing_time': 0
+        }
+        self.incoming_audio_queue = asyncio.Queue()  # Para cuando WS reciba audio
+        self.outgoing_audio_queue = asyncio.Queue()  # Para enviar audio al WS
+        self.loop = asyncio.get_event_loop()  # Obtener el loop de eventos de asyncio
+
+    def pyload_to_openai(self, audio_data):
+        self.outgoing_audio_queue.put_nowait(audio_data)
+
+    
+
+    def start_in_thread(self):
+        thread = threading.Thread(target=self.run, daemon=True)
+        thread.start()
+
+    def run(self):
+        """Inicia el procesamiento con OpenAI"""
         try:
-            
-            # 1. Concatenar todos los payloads en un solo array de bytes
-            ulaw_bytes = b''.join(audio_data)    
-            # # 2. Convertir los bytes µ-law a un array de NumPy (8 bits)
-            # ulaw_data = np.frombuffer(ulaw_bytes, dtype=np.uint8)
-            # # Decodifica desde u-law (bytes) a lineal de 16 bits (bytes)
-            # pcm16_data = ulaw2lin(ulaw_data, 2)
-            
+            self.metrics['start_time'] = time.time()
 
-
-            # Enviar audio procesado a OpenAI
-            logging.info("|||||||||||||||||||||||||||Enviando audio procesado a OpenAI...")
-            process = await asyncio.create_subprocess_exec(
-                '/usr/local/bin/openai_ws.py',
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+            # Configurar y ejecutar WebSocket
+            ws = websocket.WebSocketApp(
+                self.url,
+                header=self.headers,
+                on_open=self.on_open,
+                on_message=self.on_message,
+                on_error=self.on_error,
+                on_close=self.on_close
             )
-            
-            try:
-                stdout, stderr = await asyncio.wait_for(
-                    process.communicate(ulaw_bytes),
-                    timeout=20.0
-                )
-                
-                if stderr:
-                    logging.error(f"Error de OpenAI: {stderr.decode()}")
-                
-                if stdout:
-                    logging.info("Respuesta recibida de OpenAI")
-                    return stdout
-                
-            except asyncio.TimeoutError:
-                logging.error("Timeout al enviar audio a OpenAI")
-                if process.returncode is None:
-                    process.kill()
-                return None
-                
-            return None
-            
+
+            logging.info("Iniciando conexión WebSocket con OpenAI")
+            ws.run_forever()
+            logging.info("Conexión WebSocket cerrada")
+            return True
+
         except Exception as e:
-            logging.error(f"Error procesando audio uLaw: {e}")
-            logging.exception("Detalles del error:")
+            logging.error(f"Error en inicio: {e}")
             return None
 
+    def on_open(self, ws):
+        """Maneja apertura de conexión"""
+        try:
+            config = {
+                "type": "session.update",
+                "session": {
+                    "modalities": ["audio", "text"],
+                    "voice": "echo",
+                    "instructions": "Contesta mis preguntas",
+                    "input_audio_format": "g711_ulaw",
+                    "output_audio_format": "g711_ulaw",
+                    "turn_detection": None
+                }
+            }
+
+            ws.send(json.dumps(config))
+
+        except Exception as e:
+            logging.error(f"Error enviando configuración: {e}")
+
+    def on_message(self, ws, message):
+        """Procesa mensajes de OpenAI"""
+        try:
+            data = json.loads(message)
+            msg_type = data.get('type', '')
+
+            if msg_type == 'response.created':
+                logging.info("Sesión create creada!")
+
+            elif msg_type == 'session.updated':
+                logging.info("msg_type updated recibido, ahora enviaré audio chunks")
+                asyncio.run_coroutine_threadsafe(self.handle_session_updated(ws), self.loop)
+            elif msg_type == 'response.audio.delta':
+                self.handle_audio_delta(data)
+            elif msg_type == 'response.done':
+                logging.info("Respuesta final recibida response.done")
+            elif msg_type == 'response.audio_transcript.done':
+                logging.info(f"Transcripción: {data.get('transcript', '')}")
+            elif msg_type == 'error':
+                self.handle_error(data)
+
+            logging.debug(f"Mensaje procesado: {msg_type}")
+
+        except Exception as e:
+            logging.error(f"Error procesando mensaje: {e}")
+
+    async def handle_session_updated(self, ws):
+        """Maneja confirmación de configuración"""
+        try:
+            while True:
+                # Obtener audio del buffer de salida
+                audio_data = await self.outgoing_audio_queue.get()
+                self.send_audio_chunk_to_openai(ws, audio_data)
+                logging.info(f"Audios total enviado to_openai : {self.metrics['total_bytes_sent']} bytes >>>>>>>>>>>>")
+
+        except asyncio.CancelledError:
+            logging.info("Tarea de envío de audio a OpenAI cancelada.")
+        except Exception as e:
+            logging.error(f"Error después de configuración: {e}")
+
+    def send_audio_chunk_to_openai(self, ws, chunk):
+        """Envía chunk de audio a OpenAI"""
+        try:
+            audio_event = {
+                "event_id": f"audio_{int(time.time())}",
+                "type": "input_audio_buffer.append",
+                "audio": base64.b64encode(chunk).decode('utf-8')
+            }
+
+            ws.send(json.dumps(audio_event))
+
+            self.metrics['chunks_sent'] += 1
+            self.metrics['total_bytes_sent'] += len(chunk)
+
+            logging.debug(
+                f"Chunk enviado to_openai: {len(chunk)} bytes "
+                f"(Total: {self.metrics['total_bytes_sent']})"
+            )
+
+        except Exception as e:
+            logging.error(f"Error enviando chunk: {e}")
+
+    def handle_audio_delta(self, data):
+        """Procesa chunks de audio recibidos"""
+        try:
+            audio_buffer = base64.b64decode(data['delta'])
+            self.incoming_audio_queue.put_nowait(audio_buffer)
+            logging.debug(
+                f"Chunks audio recibido desde openai: {len(audio_buffer)} bytes "
+            )
+        except Exception as e:
+            logging.error(f"Error procesando audio delta: {e}")
+
+    def handle_error(self, data):
+        """Procesa errores de OpenAI"""
+        error_msg = data.get('error', {}).get('message', 'Error desconocido')
+        logging.error(f"Error de OpenAI: {error_msg}")
+
+    def on_error(self, ws, error):
+        """Maneja errores de WebSocket"""
+        logging.error(f"Error de WebSocket: {error}")
+
+    def on_close(self, ws, close_status_code, close_msg):
+        """Maneja cierre de conexión"""
+        logging.info(
+            f"Conexión cerrada: {close_status_code} - {close_msg}"
+        )
 
 
+
+            
+class OpenAIHandler:
+    def __init__(self):
+        self.process = None
+
+    
+
+    
+
+    async def receive_response(self, openai_client):
+        """Recibe la respuesta de OpenAI, divide en chunks de 20 ms y envía al external media."""
+        try:
+            while True:
+                # Leer línea de respuesta de OpenAI
+                audio_data = await openai_client.incoming_audio_queue.get()
+                # Dividir en subchunks de 20 ms (160 bytes para uLaw a 8 kHz)
+                chunk_size = 160
+                for i in range(0, len(audio_data), chunk_size):
+                    subchunk = audio_data[i:i + chunk_size]
+
+                    if len(subchunk) < chunk_size:
+                        # Si el último subchunk es más pequeño, lo descartamos o lo completamos
+                        subchunk = subchunk.ljust(chunk_size, b'\x00')  # Padding con silencio
+
+                    # Crear el header RTP
+                    
+                    # Incrementar secuencia y timestamp
+                    
+
+                    # Crear el paquete RTP completo
+                    
+                    # Enviar al external media
+                    
+
+        except Exception as e:
+            logging.error(f"Error recibiendo respuesta de OpenAI: {e}")
+
+    
 
 
 
@@ -475,7 +559,7 @@ class AudioConfig:
     MIN_AUDIO_LENGTH = 500         # ms mínimos de audio para procesar
     MAX_AUDIO_LENGTH = 15000       # ms máximos de audio para procesar
     
-    
+
 
 
 
@@ -489,7 +573,6 @@ class AsteriskApp:
         self.password = 'asterisk'
         
         
-        self.openai_client = OpenAIClient()
         
         # Gestión de estado
         self.active_channels = set()
@@ -502,8 +585,6 @@ class AsteriskApp:
             'bridge_channels': True,
             'default_codec': 'ulaw'
         }
-
-
 
     async def get_channel_info(self, channel_id):
         """
@@ -614,9 +695,6 @@ class AsteriskApp:
             logging.exception("Detalles del error:")
             return None
         
-
-
-
     async def get_channel_codec(self, channel_id):
         """
         Detecta el codec de audio utilizado por un canal.
@@ -827,8 +905,6 @@ class AsteriskApp:
                 logging.error(f"Error procesando evento: {e}")
                 logging.exception("Detalles del error:")
 
-
-
     async def setup_external_media(self, event, codec='ulaw'):
         channel_id = event['channel']['id']
         try:
@@ -947,8 +1023,6 @@ class AsteriskApp:
             logging.exception("Detalles del error:")
             await self.cleanup_channel(channel_id)
 
-
-
     async def handle_stasis_end(self, event):
         """Maneja el fin de Stasis para un canal"""
         channel_id = event['channel']['id']
@@ -1045,6 +1119,7 @@ class AsteriskApp:
             logging.error(f"Error fatal en start: {e}")
             logging.exception("Detalles del error fatal:")
             raise
+
 
 
 
