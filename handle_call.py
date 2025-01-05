@@ -29,15 +29,7 @@ logging.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 
-# Logger específico para procesamiento de audio en handle_call.py
-audio_logger = logging.getLogger('handle_call_audio_processing')
-audio_handler = logging.FileHandler('/tmp/shared_openai/audio_processing.log')
-audio_handler.setFormatter(logging.Formatter(
-    '%(asctime)s.%(msecs)03d - %(levelname)s - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-))
-audio_logger.addHandler(audio_handler)
-audio_logger.setLevel(logging.DEBUG)
+
 
 
 
@@ -63,6 +55,7 @@ class RTPAudioHandler:
         self.remote_address = None
         self.remote_port = None
         self.remote_configured = False  # Nuevo flag para tracking de endpoint remoto
+        self.openai_handler = None
 
     async def find_available_port(self, local_address):
         """
@@ -156,7 +149,7 @@ class RTPAudioHandler:
                 self.socket = None
             return False   
 
-    async def process_audio_stream(self, local_address  , codec='ulaw'):
+    async def process_audio_stream(self, local_address  , codec='ulaw', openai_handler=None):
         """Maneja el flujo principal de audio RTP"""
         try:
             logging.info(f"Iniciando stream de audio - {local_address} ({codec})")
@@ -167,7 +160,9 @@ class RTPAudioHandler:
             # if not await self.start(local_address, local_port, codec):
             #     logging.error("Fallo al iniciar el RTP Handler")
             #     return False
-                
+
+            self.openai_handler = openai_handler # Guardar referencia a OpenAIHandler
+
             logging.info("Stream RTP iniciado exitosamente")
             socket_info = self.socket.getsockname()
             logging.info(
@@ -193,9 +188,8 @@ class RTPAudioHandler:
         frames_processed = 0
         last_log_time = time.time()
         frame_size = None
-        ordered_frames = {}
         
-        logging.info(f"******************************************************************Iniciando bucle de procesamiento de audio en socket {self.socket.getsockname()}**********")
+        logging.info(f"*******************************Iniciando bucle de procesamiento de audio en socket {self.socket.getsockname()}**********")
         
         openai_client = OpenAIClient()
         try:
@@ -208,8 +202,7 @@ class RTPAudioHandler:
             logging.error(f"Error en openai_client: {e}")
             return False
         try:
-            openai_handler = OpenAIHandler()
-            receive_task = asyncio.create_task(openai_handler.receive_response(openai_client))
+            receive_task = asyncio.create_task(self.openai_handler.receive_response(openai_client))
         
 
             while True:
@@ -223,7 +216,8 @@ class RTPAudioHandler:
                     
                     try:
                         data = await asyncio.wait_for(
-                            loop.sock_recv(self.socket, 1024)
+                            loop.sock_recv(self.socket, 1024),
+                            timeout=0.2
                         )
                         frames_processed += 1
                     except asyncio.TimeoutError:
@@ -245,8 +239,16 @@ class RTPAudioHandler:
                     elif len(payload) != frame_size:
                         logging.warning(f"Tamaño de frame inconsistente: {len(payload)} vs {frame_size}")
                         continue
+                    # Acumular bytes en un buffer
+                    if not hasattr(self, 'byte_buffer'):
+                        self.byte_buffer = b''
                     
-                    openai_client.pyload_to_openai(payload)
+                    self.byte_buffer += payload
+                    chunk = 600  #             160 es Tamaño de chunk en bytes (20 ms a 8 kHz)
+                    # Llamar al método cuando se acumulen chunk bytes
+                    if len(self.byte_buffer) >= chunk:
+                        openai_client.pyload_to_openai(self.byte_buffer[:chunk])
+                        self.byte_buffer = self.byte_buffer[chunk:]
 
                 except Exception as e:
                     logging.error(f"Error en process_audio: {e}")
@@ -254,13 +256,8 @@ class RTPAudioHandler:
         
         
         except asyncio.CancelledError:
-            logging.info("Llamada finalizada.")
-        finally:
-            await openai_handler.close_openai_stream()
+            logging.info("Procesamiento de audio cancelado")
             receive_task.cancel()  # Cancelar recepción            
-
-
-
 
     def parse_rtp_header(self, packet):
         """Parsea la cabecera RTP y retorna el payload y número de secuencia"""
@@ -299,8 +296,6 @@ class RTPAudioHandler:
 
         return payload, sequence_number
 
-    
-
     async def cleanup(self):
         try:
             self.running = False
@@ -332,7 +327,19 @@ class RTPAudioHandler:
         except Exception as e:
             logging.error(f"Error durante la limpieza de RTP Handler: {e}")
 
-
+    async def send_rtp_packet(self, packet):
+        """Envía un paquete RTP al socket"""
+        try:
+            if self.socket:
+                self.socket.sendto(packet, (self.remote_address, self.remote_port))
+                logging.debug(
+                    f"Paquete RTP enviado a {self.remote_address}:{self.remote_port} "
+                    f"- {len(packet)} bytes"
+                )
+            else:
+                logging.error("Error enviando paquete RTP: Socket no disponible")
+        except Exception as e:
+            logging.error(f"Error enviando paquete RTP: {e}")
 
 
 class OpenAIClient:
@@ -405,7 +412,12 @@ class OpenAIClient:
                     "instructions": "Contesta mis preguntas",
                     "input_audio_format": "g711_ulaw",
                     "output_audio_format": "g711_ulaw",
-                    "turn_detection": None
+                    "turn_detection": {
+                        "type": "server_vad",
+                        "threshold": 0.5,
+                        "prefix_padding_ms": 300,
+                        "silence_duration_ms": 100,
+                    }
                 }
             }
 
@@ -447,7 +459,7 @@ class OpenAIClient:
                 # Obtener audio del buffer de salida
                 audio_data = await self.outgoing_audio_queue.get()
                 self.send_audio_chunk_to_openai(ws, audio_data)
-                logging.info(f"Audios total enviado to_openai : {self.metrics['total_bytes_sent']} bytes >>>>>>>>>>>>")
+                # logging.info(f"Audios total enviado to_openai : {self.metrics['total_bytes_sent']} bytes >>>>>>>>>>>>")
 
         except asyncio.CancelledError:
             logging.info("Tarea de envío de audio a OpenAI cancelada.")
@@ -457,22 +469,24 @@ class OpenAIClient:
     def send_audio_chunk_to_openai(self, ws, chunk):
         """Envía chunk de audio a OpenAI"""
         try:
-            audio_event = {
-                "event_id": f"audio_{int(time.time())}",
-                "type": "input_audio_buffer.append",
-                "audio": base64.b64encode(chunk).decode('utf-8')
-            }
+            if ws.sock and ws.sock.connected:
+                audio_event = {
+                    "event_id": f"audio_{int(time.time())}",
+                    "type": "input_audio_buffer.append",
+                    "audio": base64.b64encode(chunk).decode('utf-8')
+                }
 
-            ws.send(json.dumps(audio_event))
+                ws.send(json.dumps(audio_event))
 
-            self.metrics['chunks_sent'] += 1
-            self.metrics['total_bytes_sent'] += len(chunk)
+                self.metrics['chunks_sent'] += 1
+                self.metrics['total_bytes_sent'] += len(chunk)
 
-            logging.debug(
-                f"Chunk enviado to_openai: {len(chunk)} bytes "
-                f"(Total: {self.metrics['total_bytes_sent']})"
-            )
-
+                logging.debug(
+                    f"Chunk enviado to_openai: {len(chunk)} bytes "
+                    f"(Total: {self.metrics['total_bytes_sent']})"
+                )
+            else:
+                logging.error("Error enviando chunk: Connection is already closed.")
         except Exception as e:
             logging.error(f"Error enviando chunk: {e}")
 
@@ -506,12 +520,12 @@ class OpenAIClient:
 
             
 class OpenAIHandler:
-    def __init__(self):
+    def __init__(self, rtp_handler):
         self.process = None
-
-    
-
-    
+        self.rtp_handler = rtp_handler  # Guardamos referencia al RTP handler
+        self.sequence_number = 0
+        self.timestamp = 0
+        self.ssrc = random.randint(0, 2**32 - 1)
 
     async def receive_response(self, openai_client):
         """Recibe la respuesta de OpenAI, divide en chunks de 20 ms y envía al external media."""
@@ -519,29 +533,55 @@ class OpenAIHandler:
             while True:
                 # Leer línea de respuesta de OpenAI
                 audio_data = await openai_client.incoming_audio_queue.get()
+                logging.debug(f"Recibidos {len(audio_data)} bytes de audio de OpenAI")
+                
                 # Dividir en subchunks de 20 ms (160 bytes para uLaw a 8 kHz)
                 chunk_size = 160
                 for i in range(0, len(audio_data), chunk_size):
                     subchunk = audio_data[i:i + chunk_size]
 
                     if len(subchunk) < chunk_size:
-                        # Si el último subchunk es más pequeño, lo descartamos o lo completamos
-                        subchunk = subchunk.ljust(chunk_size, b'\x00')  # Padding con silencio
+                        # Si el último subchunk es más pequeño, lo completamos con silencio
+                        subchunk = subchunk.ljust(chunk_size, b'\x00')
 
                     # Crear el header RTP
-                    
-                    # Incrementar secuencia y timestamp
-                    
+                    rtp_header = bytearray(12)
+                    rtp_header[0] = 0x80  # Versión 2
+                    rtp_header[1] = 0x00  # Tipo de payload (0 para PCMU/ulaw)
+                    rtp_header[2] = (self.sequence_number >> 8) & 0xFF
+                    rtp_header[3] = self.sequence_number & 0xFF
+                    rtp_header[4] = (self.timestamp >> 24) & 0xFF
+                    rtp_header[5] = (self.timestamp >> 16) & 0xFF
+                    rtp_header[6] = (self.timestamp >> 8) & 0xFF
+                    rtp_header[7] = self.timestamp & 0xFF
+                    rtp_header[8] = (self.ssrc >> 24) & 0xFF
+                    rtp_header[9] = (self.ssrc >> 16) & 0xFF
+                    rtp_header[10] = (self.ssrc >> 8) & 0xFF
+                    rtp_header[11] = self.ssrc & 0xFF
 
                     # Crear el paquete RTP completo
+                    rtp_packet = bytes(rtp_header) + subchunk
                     
-                    # Enviar al external media
-                    
+                    # Enviar al external media usando el RTP handler
+                    if self.rtp_handler and hasattr(self.rtp_handler, 'send_rtp_packet'):
+                        try:
+                            await self.rtp_handler.send_rtp_packet(rtp_packet)
+                            logging.debug(f"Enviado paquete RTP {self.sequence_number} al external media")
+                        except Exception as e:
+                            logging.error(f"Error enviando paquete RTP: {e}")
+                    else:
+                        logging.error("RTP handler no disponible o método send_rtp_packet no encontrado")
+                        return
 
+                    # Incrementar secuencia y timestamp (con wraparound)
+                    self.sequence_number = (self.sequence_number + 1) & 0xFFFF  # Mantener en 16 bits
+                    self.timestamp = (self.timestamp + chunk_size) & 0xFFFFFFFF  # Mantener en 32 bits
+
+        except asyncio.CancelledError:
+            logging.info("Tarea de recepción de respuesta de OpenAI cancelada.")
         except Exception as e:
             logging.error(f"Error recibiendo respuesta de OpenAI: {e}")
-
-    
+            logging.exception("Detalles del error:")
 
 
 
@@ -941,6 +981,12 @@ class AsteriskApp:
             local_address = "45.61.59.204"
             rtp_handler = RTPAudioHandler()
             
+            #Crear OpenAIHandler con el rtp_handler
+            if rtp_handler != None:
+                logging.info("RTP Handler creado exitosamente para canal {channel_id}")
+                openai_handler = OpenAIHandler(rtp_handler)
+            
+            
             try:
                 available_port = await rtp_handler.find_available_port(local_address)
                 # logging.info(f"Puerto RTP local encontrado: {available_port}")
@@ -1005,7 +1051,8 @@ class AsteriskApp:
                         rtp_task = asyncio.create_task(
                             rtp_handler.process_audio_stream(
                                 local_address=local_address,
-                                codec=codec
+                                codec=codec,
+                                openai_handler=openai_handler
                             )
                         )
                         self.active_tasks[external_channel_id] = rtp_task
@@ -1126,6 +1173,7 @@ class AsteriskApp:
 async def main():
     """Función principal"""
     logging.info("Iniciando aplicación Asterisk ARI")
+    await asyncio.sleep(1)
     try:
         app = AsteriskApp()
         logging.info("Aplicación iniciada") 
@@ -1135,4 +1183,5 @@ async def main():
         logging.error(f"Error en main: {e}")
 
 if __name__ == "__main__":
+    logging.info("Iniciando script...")
     asyncio.run(main())
