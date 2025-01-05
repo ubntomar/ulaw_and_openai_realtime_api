@@ -408,7 +408,7 @@ class OpenAIClient:
                 "type": "session.update",
                 "session": {
                     "modalities": ["audio", "text"],
-                    "voice": "echo",
+                    "voice": "verse",
                     "instructions": "Contesta mis preguntas",
                     "input_audio_format": "g711_ulaw",
                     "output_audio_format": "g711_ulaw",
@@ -518,70 +518,120 @@ class OpenAIClient:
 
 
 
-            
+
 class OpenAIHandler:
     def __init__(self, rtp_handler):
         self.process = None
-        self.rtp_handler = rtp_handler  # Guardamos referencia al RTP handler
+        self.rtp_handler = rtp_handler
         self.sequence_number = 0
         self.timestamp = 0
         self.ssrc = random.randint(0, 2**32 - 1)
+        self.audio_buffer = bytearray()
+        self.last_packet_time = 0
+        self.packet_interval = 0.0179  # 20ms entre paquetes
+        self.rtp_packet_size = 160    # 20ms de audio a 8kHz
+        self.target_buffer_size = 1600  # 200ms de buffer inicial (10 paquetes RTP)
 
     async def receive_response(self, openai_client):
-        """Recibe la respuesta de OpenAI, divide en chunks de 20 ms y envía al external media."""
+        """Recibe la respuesta de OpenAI y la envía como paquetes RTP temporizados."""
         try:
+            await self.wait_for_buffer(openai_client)
+            last_log = time.time()
+            packets_sent = 0
+
             while True:
-                # Leer línea de respuesta de OpenAI
-                audio_data = await openai_client.incoming_audio_queue.get()
-                logging.debug(f"Recibidos {len(audio_data)} bytes de audio de OpenAI")
-                
-                # Dividir en subchunks de 20 ms (160 bytes para uLaw a 8 kHz)
-                chunk_size = 160
-                for i in range(0, len(audio_data), chunk_size):
-                    subchunk = audio_data[i:i + chunk_size]
+                current_time = time.time()
 
-                    if len(subchunk) < chunk_size:
-                        # Si el último subchunk es más pequeño, lo completamos con silencio
-                        subchunk = subchunk.ljust(chunk_size, b'\x00')
-
-                    # Crear el header RTP
-                    rtp_header = bytearray(12)
-                    rtp_header[0] = 0x80  # Versión 2
-                    rtp_header[1] = 0x00  # Tipo de payload (0 para PCMU/ulaw)
-                    rtp_header[2] = (self.sequence_number >> 8) & 0xFF
-                    rtp_header[3] = self.sequence_number & 0xFF
-                    rtp_header[4] = (self.timestamp >> 24) & 0xFF
-                    rtp_header[5] = (self.timestamp >> 16) & 0xFF
-                    rtp_header[6] = (self.timestamp >> 8) & 0xFF
-                    rtp_header[7] = self.timestamp & 0xFF
-                    rtp_header[8] = (self.ssrc >> 24) & 0xFF
-                    rtp_header[9] = (self.ssrc >> 16) & 0xFF
-                    rtp_header[10] = (self.ssrc >> 8) & 0xFF
-                    rtp_header[11] = self.ssrc & 0xFF
-
-                    # Crear el paquete RTP completo
-                    rtp_packet = bytes(rtp_header) + subchunk
+                # Procesar el buffer si hay suficientes datos
+                while len(self.audio_buffer) >= self.rtp_packet_size:
+                    time_since_last = current_time - self.last_packet_time
                     
-                    # Enviar al external media usando el RTP handler
-                    if self.rtp_handler and hasattr(self.rtp_handler, 'send_rtp_packet'):
-                        try:
-                            await self.rtp_handler.send_rtp_packet(rtp_packet)
-                            logging.debug(f"Enviado paquete RTP {self.sequence_number} al external media")
-                        except Exception as e:
-                            logging.error(f"Error enviando paquete RTP: {e}")
+                    if time_since_last >= self.packet_interval:
+                        # Extraer y enviar un paquete RTP
+                        packet_data = self.audio_buffer[:self.rtp_packet_size]
+                        self.audio_buffer = self.audio_buffer[self.rtp_packet_size:]
+                        
+                        # Crear y enviar el paquete RTP
+                        await self.send_rtp_packet(packet_data)
+                        
+                        self.last_packet_time = current_time
+                        packets_sent += 1
+                        
+                        # Log cada segundo
+                        if current_time - last_log >= 1.0:
+                            logging.debug(f"Paquetes RTP enviados en el último segundo: {packets_sent}")
+                            packets_sent = 0
+                            last_log = current_time
                     else:
-                        logging.error("RTP handler no disponible o método send_rtp_packet no encontrado")
-                        return
+                        # Esperar hasta el próximo intervalo
+                        await asyncio.sleep(self.packet_interval - time_since_last)
+                        break
 
-                    # Incrementar secuencia y timestamp (con wraparound)
-                    self.sequence_number = (self.sequence_number + 1) & 0xFFFF  # Mantener en 16 bits
-                    self.timestamp = (self.timestamp + chunk_size) & 0xFFFFFFFF  # Mantener en 32 bits
+                # Si el buffer está bajo, esperar más datos
+                if len(self.audio_buffer) < self.rtp_packet_size:
+                    try:
+                        new_data = await asyncio.wait_for(
+                            openai_client.incoming_audio_queue.get(),
+                            timeout=0.5
+                        )
+                        self.audio_buffer.extend(new_data)
+                    except asyncio.TimeoutError:
+                        # Si no hay datos nuevos, insertar un frame de silencio
+                        if len(self.audio_buffer) < self.rtp_packet_size:
+                            await asyncio.sleep(self.packet_interval)
+                    except Exception as e:
+                        logging.error(f"Error recibiendo audio: {e}")
+                        continue
+
+                await asyncio.sleep(0.001)  # Pequeña pausa para evitar CPU alta
 
         except asyncio.CancelledError:
             logging.info("Tarea de recepción de respuesta de OpenAI cancelada.")
         except Exception as e:
             logging.error(f"Error recibiendo respuesta de OpenAI: {e}")
             logging.exception("Detalles del error:")
+
+    async def wait_for_buffer(self, openai_client):
+        """Espera hasta tener suficiente audio en el buffer antes de comenzar."""
+        logging.info("Esperando buffer inicial...")
+        while len(self.audio_buffer) < self.target_buffer_size:
+            try:
+                data = await openai_client.incoming_audio_queue.get()
+                self.audio_buffer.extend(data)
+            except Exception as e:
+                logging.error(f"Error llenando buffer inicial: {e}")
+                await asyncio.sleep(0.1)
+        logging.info(f"Buffer inicial listo: {len(self.audio_buffer)} bytes")
+
+    async def send_rtp_packet(self, payload):
+        """Envía un paquete RTP con el payload proporcionado."""
+        try:
+            rtp_header = bytearray(12)
+            rtp_header[0] = 0x80  # Versión 2
+            rtp_header[1] = 0x00  # Tipo de payload (0 para PCMU/ulaw)
+            rtp_header[2] = (self.sequence_number >> 8) & 0xFF
+            rtp_header[3] = self.sequence_number & 0xFF
+            rtp_header[4] = (self.timestamp >> 24) & 0xFF
+            rtp_header[5] = (self.timestamp >> 16) & 0xFF
+            rtp_header[6] = (self.timestamp >> 8) & 0xFF
+            rtp_header[7] = self.timestamp & 0xFF
+            rtp_header[8] = (self.ssrc >> 24) & 0xFF
+            rtp_header[9] = (self.ssrc >> 16) & 0xFF
+            rtp_header[10] = (self.ssrc >> 8) & 0xFF
+            rtp_header[11] = self.ssrc & 0xFF
+
+            rtp_packet = bytes(rtp_header) + payload
+            
+            await self.rtp_handler.send_rtp_packet(rtp_packet)
+            
+            # Incrementar secuencia y timestamp
+            self.sequence_number = (self.sequence_number + 1) & 0xFFFF
+            self.timestamp = (self.timestamp + len(payload)) & 0xFFFFFFFF
+            
+        except Exception as e:
+            logging.error(f"Error enviando paquete RTP: {e}")
+
+
 
 
 
