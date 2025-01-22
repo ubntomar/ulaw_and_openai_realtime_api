@@ -428,9 +428,9 @@ class OpenAIClient:
                     "output_audio_format": "g711_ulaw",
                     "turn_detection": {
                         "type": "server_vad",
-                        "threshold": 0.4,
+                        "threshold": 0.2,
                         "prefix_padding_ms": 300,
-                        "silence_duration_ms": 50,
+                        "silence_duration_ms": 100,
                     }
                 }
             }
@@ -462,11 +462,11 @@ class OpenAIClient:
                 logging.info("*****************************speech_<START> Recibido***********************************************")
                 
                 # Limpiar la cola de audio pendiente
-                # while not self.incoming_audio_queue.empty():
-                #     try:
-                #         self.incoming_audio_queue.get_nowait()
-                #     except asyncio.QueueEmpty:
-                #         break
+                while not self.incoming_audio_queue.empty():
+                    try:
+                        self.incoming_audio_queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
                 logging.info("Cola de audio limpiada por detección de voz del usuario")
                 
             
@@ -483,7 +483,7 @@ class OpenAIClient:
             elif msg_type == 'error':
                 self.handle_error(data)
 
-            logging.debug(f"Mensaje procesado: {msg_type}")
+            logging.debug(f"Mensaje procesado: {data}")
 
         except Exception as e:
             logging.error(f"Error procesando mensaje: {e}")
@@ -568,7 +568,7 @@ class OpenAIHandler:
         self.last_packet_time = 0
         self.packet_interval = 0.0179  # 20ms entre paquetes
         self.rtp_packet_size = 160    # 20ms de audio a 8kHz
-        self.target_buffer_size = 1600  # 200ms de buffer inicial (10 paquetes RTP)
+        self.target_buffer_size = 3200  # 200ms de buffer inicial (10 paquetes RTP)
 
     async def receive_response(self, openai_client):
         """Recibe la respuesta de OpenAI y la envía como paquetes RTP temporizados."""
