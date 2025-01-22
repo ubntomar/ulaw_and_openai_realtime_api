@@ -21,7 +21,7 @@ from audioop import ulaw2lin
 import websocket
 import base64
 
-#Configuración de logging principal para handle_call.py ..
+#Configuración de logging principal para handle_call.py .....
 logging.basicConfig(
     filename="/tmp/shared_openai/ari_app.log",
     level=logging.DEBUG,
@@ -209,9 +209,7 @@ class RTPAudioHandler:
                 try:
                     current_time = time.time()
                     if current_time - last_log_time >= 5:
-                        logging.info(
-                            f"Estado del procesamiento - Frames: {frames_processed} "
-                        )
+                        
                         last_log_time = current_time
                     
                     try:
@@ -223,6 +221,8 @@ class RTPAudioHandler:
                     except asyncio.TimeoutError:
                         continue
                         
+
+
                     if not data:
                         logging.debug("Frame RTP vacío")
                         continue
@@ -243,6 +243,9 @@ class RTPAudioHandler:
                     if not hasattr(self, 'byte_buffer'):
                         self.byte_buffer = b''
                     
+                    
+                    
+
                     self.byte_buffer += payload
                     chunk = 600  #             160 es Tamaño de chunk en bytes (20 ms a 8 kHz)
                     # Llamar al método cuando se acumulen chunk bytes
@@ -332,14 +335,16 @@ class RTPAudioHandler:
         try:
             if self.socket:
                 self.socket.sendto(packet, (self.remote_address, self.remote_port))
-                logging.debug(
-                    f"Paquete RTP enviado a {self.remote_address}:{self.remote_port} "
-                    f"- {len(packet)} bytes"
-                )
+                # logging.debug(
+                #     f"Paquete RTP enviado a {self.remote_address}:{self.remote_port} "
+                #     f"- {len(packet)} bytes"
+                # )
             else:
                 logging.error("Error enviando paquete RTP: Socket no disponible")
         except Exception as e:
             logging.error(f"Error enviando paquete RTP: {e}")
+
+
 
 
 class OpenAIClient:
@@ -367,11 +372,13 @@ class OpenAIClient:
         self.incoming_audio_queue = asyncio.Queue()  # Para cuando WS reciba audio
         self.outgoing_audio_queue = asyncio.Queue()  # Para enviar audio al WS
         self.loop = asyncio.get_event_loop()  # Obtener el loop de eventos de asyncio
+        # Agregando lógica para interrumpir audio en caso de que el cliente hable mientras el asistente está hablando
+        self.current_ws = None
+        self.assistant_speaking = False
+
 
     def pyload_to_openai(self, audio_data):
         self.outgoing_audio_queue.put_nowait(audio_data)
-
-    
 
     def start_in_thread(self):
         thread = threading.Thread(target=self.run, daemon=True)
@@ -392,6 +399,10 @@ class OpenAIClient:
                 on_close=self.on_close
             )
 
+            # Agregando lógica para interrumpir audio en caso de que el cliente hable mientras el asistente está hablando
+            self.current_ws = ws  
+
+
             logging.info("Iniciando conexión WebSocket con OpenAI")
             ws.run_forever()
             logging.info("Conexión WebSocket cerrada")
@@ -400,6 +411,7 @@ class OpenAIClient:
         except Exception as e:
             logging.error(f"Error en inicio: {e}")
             return None
+
 
     def on_open(self, ws):
         """Maneja apertura de conexión"""
@@ -410,76 +422,7 @@ class OpenAIClient:
                     "modalities": ["audio", "text"],
                     "voice": "verse",
                     "instructions": """
-                    Eres Kevin Leandro ,  un asistente de soporte técnico avanzado para una empresa de servicios de internet inalámbrico y fibra óptica llamada "AG Ingeniería Wis". Tu objetivo es ayudar a los clientes con rapidez, precisión y empatía siempre con respuestas cortas de no mas de 10 segundos. A continuación se detallan tus instrucciones:
-                    ### 1. Identificación y saludo
-                    - Siempre comienza con un saludo cordial, por ejemplo: "Hola, bienvenido al soporte técnico de Ingeniería , soy Kevin. ¿En qué puedo ayudarte hoy?".
-                    - Identifícate como el asistente de soporte técnico de la empresa.
-                    - Siempre pide confirmación de todo lo que vallas a hacer antes de proceder a responder, no des por hecho que has entendido la pregunta que el usuario te haga.
-                    
-                    ### 2. Categorías de asistencia
-                    Puedes manejar preguntas y realizar acciones para las siguientes categorías:
-
-                    #### a) Problemas de conexión a internet:
-                    - Pregunta al cliente si ha notado que el problema ocurre en todos los dispositivos o solo en uno.
-                    - Si es posible, guíalo para reiniciar su router o equipo de fibra óptica:
-                    - "Por favor, apaga tu router, espera 30 segundos y vuelve a encenderlo."
-                    - Verifica si hay luces rojas o parpadeantes en el equipo.
-                    - Si el problema persiste:
-                    - Recopila detalles como dirección IP local (por ejemplo, 192.168.x.x), el estado de su conexión inalámbrica y el modelo del router.
-                    - Sugiere conectar un cable de red directamente al equipo para descartar fallos de Wi-Fi.
-
-                    #### b) Problemas de velocidad lenta:
-                    - Verifica si hay descargas activas en casa o si muchos usuarios están conectados al mismo tiempo.
-                    - Pide al cliente realizar un test de velocidad en línea (recomienda una página confiable).
-                    - Si la velocidad es menor a la contratada, ofrece resetear el servicio o reiniciar la OLT (explica que el reinicio puede tardar unos minutos).
-
-                    #### c) Corte de servicio:
-                    - Verifica si hay trabajos de mantenimiento programados en la zona.
-                    - Pregunta si ha recibido notificaciones recientes sobre desconexiones por pagos atrasados.
-                    - En caso de ser un problema general en la zona, indica al cliente que la reparación está en curso y proporciona un tiempo estimado.
-
-                    ### 3. Configuración de equipo
-                    - Puedes ayudar con la configuración de routers, por ejemplo:
-                    - Cambio de nombre de la red Wi-Fi y contraseña.
-                    - Guía para acceder al panel de administración del router (por ejemplo, "Abre un navegador e ingresa 192.168.0.1...").
-
-                    ### 4. Problemas con el servicio de fibra óptica
-                    - Pide al cliente verificar que el cable de fibra esté bien conectado.
-                    - Pregunta si la luz de "PON" o "LOS" está encendida o parpadea:
-                    - Si la luz "PON" está apagada, sugiere revisar la conexión óptica.
-                    - Si la luz "LOS" está roja o parpadeando, informa que podría ser un problema de enlace remoto.
-
-                    ### 5. Información de pagos y facturación
-                    - Si el cliente pregunta sobre el estado de sus pagos:
-                    - Infórmales cómo realizar un pago en línea o en puntos físicos autorizados.
-                    - Si está en mora, proporciona un mensaje claro sobre la reactivación del servicio una vez realizado el pago.
-                    
-                    ### 6. Problemas con la señal Wi-Fi
-                    - Pregunta si el cliente tiene el router cerca de paredes o interferencias (microondas, otros dispositivos).
-                    - Sugiere ubicar el router en un lugar más céntrico de la casa.
-                    - Ofrece ayuda para cambiar el canal de Wi-Fi si hay interferencias.
-
-                    ### 7. Cortes por mal tiempo
-                    - Si hay lluvias intensas o cortes de energía eléctrica en la zona:
-                    - Explica al cliente que los cortes pueden ser causados por condiciones climáticas.
-                    - Proporciona una recomendación: "Si el problema continúa cuando pase el mal tiempo, contáctenos nuevamente."
-
-                    ### 8. Comunicación efectiva
-                    - Utiliza un lenguaje simple, claro y educado.
-                    - Evita tecnicismos complejos y mantén un tono positivo.
-                    - Si no puedes resolver el problema de inmediato:
-                    - "Voy a escalar tu caso al área técnica. Por favor, espera mientras recopilamos más información."
-
-                    ### 9. Finalización del soporte
-                    - Agradece al cliente por confiar en el servicio: "Gracias por comunicarte con el soporte técnico de Ingeniería. ¡Esperamos que tu problema se haya resuelto!"
-                    - Pregunta si necesita algo más antes de finalizar la llamada.
-
-                    ### 10. Escalación de problemas complejos
-                    - Si detectas un problema fuera de tu alcance, indica al cliente que su caso será escalado: "Voy a pasar tu caso al equipo de soporte avanzado. Ellos te contactarán pronto."
-                    ### 11. Cuando no entiendas la pregunta:
-                    - Si no comprendes la solicitud del cliente después de intentar ayudar, responde: 
-                    - "Lo siento, no entendí completamente tu pregunta. Voy a transferirte con un especialista de soporte avanzado para que pueda ayudarte mejor."
-                    - Finaliza la interacción para que el cliente pueda ser transferido.
+                    Contesa de una manera amable y muy detallada.
                     """,
                     "input_audio_format": "g711_ulaw",
                     "output_audio_format": "g711_ulaw",
@@ -510,12 +453,33 @@ class OpenAIClient:
             elif msg_type == 'session.updated':
                 logging.info("msg_type updated recibido, ahora enviaré audio chunks")
                 asyncio.run_coroutine_threadsafe(self.handle_session_updated(ws), self.loop)
+            
             elif msg_type == 'response.audio.delta':
+                logging.info("++++++++++++response.audio.delta recibido++++++++++++")
                 self.handle_audio_delta(data)
+            
+            elif msg_type == 'input_audio_buffer.speech_started':
+                logging.info("*****************************speech_<START> Recibido***********************************************")
+                
+                # Limpiar la cola de audio pendiente
+                # while not self.incoming_audio_queue.empty():
+                #     try:
+                #         self.incoming_audio_queue.get_nowait()
+                #     except asyncio.QueueEmpty:
+                #         break
+                logging.info("Cola de audio limpiada por detección de voz del usuario")
+                
+            
+            elif msg_type == 'input_audio_buffer.speech_stopped':
+                logging.info("*****************************speech_<END> recibido***********************************************")
+                # self.asistente_callate = False
+
             elif msg_type == 'response.done':
                 logging.info("Respuesta final recibida response.done")
+            
             elif msg_type == 'response.audio_transcript.done':
                 logging.info(f"Transcripción: {data.get('transcript', '')}")
+            
             elif msg_type == 'error':
                 self.handle_error(data)
 
@@ -523,6 +487,8 @@ class OpenAIClient:
 
         except Exception as e:
             logging.error(f"Error procesando mensaje: {e}")
+
+   
 
     async def handle_session_updated(self, ws):
         """Maneja confirmación de configuración"""
@@ -553,10 +519,10 @@ class OpenAIClient:
                 self.metrics['chunks_sent'] += 1
                 self.metrics['total_bytes_sent'] += len(chunk)
 
-                logging.debug(
-                    f"Chunk enviado to_openai: {len(chunk)} bytes "
-                    f"(Total: {self.metrics['total_bytes_sent']})"
-                )
+                # logging.debug(
+                #     f"Chunk enviado to_openai: {len(chunk)} bytes "
+                #     f"(Total: {self.metrics['total_bytes_sent']})"
+                # )
             else:
                 logging.error("Error enviando chunk: Connection is already closed.")
         except Exception as e:
@@ -567,9 +533,9 @@ class OpenAIClient:
         try:
             audio_buffer = base64.b64decode(data['delta'])
             self.incoming_audio_queue.put_nowait(audio_buffer)
-            logging.debug(
-                f"Chunks audio recibido desde openai: {len(audio_buffer)} bytes "
-            )
+            # logging.debug(
+            #     f"Chunks audio recibido desde openai: {len(audio_buffer)} bytes "
+            # )
         except Exception as e:
             logging.error(f"Error procesando audio delta: {e}")
 
