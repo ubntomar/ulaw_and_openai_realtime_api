@@ -41,7 +41,8 @@ def check_environment():
         'ASTERISK_PASSWORD': None,
         'ASTERISK_HOST': None,
         'ASTERISK_PORT': None,
-        'LOG_FILE_PATH': None
+        'LOG_FILE_PATH': None,
+        'LOCAL_IP_ADDRESS': None
     }
     
     missing_vars = []
@@ -60,9 +61,10 @@ def check_environment():
     return {
         'ASTERISK_USERNAME': os.getenv('ASTERISK_USERNAME'),
         'ASTERISK_PASSWORD': os.getenv('ASTERISK_PASSWORD'),
-        'ASTERISK_HOST': os.getenv('ASTERISK_HOST', 'localhost'),
-        'ASTERISK_PORT': os.getenv('ASTERISK_PORT', '8088'),
-        'LOG_FILE_PATH': os.getenv('LOG_FILE_PATH')
+        'ASTERISK_HOST': os.getenv('ASTERISK_HOST'),
+        'ASTERISK_PORT': os.getenv('ASTERISK_PORT'),
+        'LOG_FILE_PATH': os.getenv('LOG_FILE_PATH'),
+        'LOCAL_IP_ADDRESS': os.getenv('LOCAL_IP_ADDRESS')
     }
 
 
@@ -76,7 +78,7 @@ ASTERISK_PORT = env_vars['ASTERISK_PORT']
 ASTERISK_USERNAME = env_vars['ASTERISK_USERNAME']
 ASTERISK_PASSWORD = env_vars['ASTERISK_PASSWORD']
 LOG_FILE_PATH = env_vars['LOG_FILE_PATH']
-
+LOCAL_IP_ADDRESS = env_vars['LOCAL_IP_ADDRESS']
 
 
 #Configuración de logging principal para handle_call.py .....
