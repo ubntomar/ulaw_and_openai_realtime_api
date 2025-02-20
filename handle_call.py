@@ -21,8 +21,7 @@ from audioop import ulaw2lin
 import websocket
 import base64
 
-
-# Configuración de dialplan  para handle_call.py .....
+# Configuración de dialplan  para handle_call.py ......
 # root@vpsserver2024:/home/omar# cat /etc/asterisk/extensions.conf
 # [from-voip]
 # exten => 3241000752,1,Answer()
@@ -36,11 +35,53 @@ import base64
 #     same => n,Return()
 
 
+def check_environment():
+    required_vars = {
+        'ASTERISK_USERNAME': None,
+        'ASTERISK_PASSWORD': None,
+        'ASTERISK_HOST': None,
+        'ASTERISK_PORT': None,
+        'LOG_FILE_PATH': None
+    }
+    
+    missing_vars = []
+    
+    for var, default in required_vars.items():
+        value = os.getenv(var, default)
+        if value is None:
+            missing_vars.append(var)
+        logging.info(f"Variable {var}: {'[CONFIGURADA]' if value else '[NO CONFIGURADA]'}")
+    
+    if missing_vars:
+        logging.error(f"Variables de ambiente requeridas no encontradas: {', '.join(missing_vars)}")
+        logging.error("Por favor configure las variables antes de ejecutar el script, Usar la opción -E de sudo para preservar el entorno")
+        sys.exit(1)
+    
+    return {
+        'ASTERISK_USERNAME': os.getenv('ASTERISK_USERNAME'),
+        'ASTERISK_PASSWORD': os.getenv('ASTERISK_PASSWORD'),
+        'ASTERISK_HOST': os.getenv('ASTERISK_HOST', 'localhost'),
+        'ASTERISK_PORT': os.getenv('ASTERISK_PORT', '8088'),
+        'LOG_FILE_PATH': os.getenv('LOG_FILE_PATH')
+    }
+
+
+
+# Verificar variables de ambiente
+env_vars = check_environment()
+
+# Usar las variables verificadas
+ASTERISK_HOST = env_vars['ASTERISK_HOST']
+ASTERISK_PORT = env_vars['ASTERISK_PORT']
+ASTERISK_USERNAME = env_vars['ASTERISK_USERNAME']
+ASTERISK_PASSWORD = env_vars['ASTERISK_PASSWORD']
+LOG_FILE_PATH = env_vars['LOG_FILE_PATH']
+
 
 
 #Configuración de logging principal para handle_call.py .....
 logging.basicConfig(
-    filename="/tmp/shared_openai/ari_app.log",
+    filename=LOG_FILE_PATH,
     level=logging.DEBUG,
     format='%(asctime)s.%(msecs)03d - %(levelname)s - %(funcName)s - %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
@@ -713,11 +754,11 @@ class AsteriskApp:
     def __init__(self):
         """Inicializa la aplicación ARI con todos los componentes necesarios"""
         # Configuración de conexión ARI
-        self.base_url = 'http://localhost:8088/ari'
-        self.username = 'asterisk'
-        self.password = 'asterisk'
+        self.base_url = f'http://{ASTERISK_HOST}:{ASTERISK_PORT}/ari'
+        self.username = ASTERISK_USERNAME
+        self.password = ASTERISK_PASSWORD
         
-        
+       
         
         # Gestión de estado
         self.active_channels = set()
@@ -1083,7 +1124,7 @@ class AsteriskApp:
                         logging.error(f"Error parseando RTP dest '{rtp_dest}': {e}")
             
             # 2) Crear RTP handler y obtener puerto local
-            local_address = "45.61.59.204"
+            local_address = LOCAL_IP_ADDRESS
             rtp_handler = RTPAudioHandler()
             
             #Crear OpenAIHandler con el rtp_handler
@@ -1263,6 +1304,9 @@ class AsteriskApp:
                 except Exception as e:
                     # Otros errores inesperados
                     logging.error(f"Error en la conexión: {e}")
+                    logging.info(f"Conectando a Asterisk en {self.base_url}")
+                    logging.info(f"Usuario: {ASTERISK_USERNAME}")
+                    logging.info(f"Contraseña: {ASTERISK_PASSWORD}")
                     logging.exception("Detalles del error:")
                     await asyncio.sleep(5)
                     

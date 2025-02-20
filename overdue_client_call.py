@@ -7,12 +7,13 @@ import json
 import os
 
 # Configuración
-DESTINATION_NUMBER = "3147654655"  # Número al que queremos llamar
-AUDIO_PATH = "/tmp/morosos_telefono.wav"
+DESTINATION_NUMBER = "573147654655"  # Número con prefijo del país
+AUDIO_PATH = "file:///tmp/morosos_telefono.wav"
 ARI_URL = "http://localhost:8088/ari"
 WEBSOCKET_URL = "ws://localhost:8088/ari/events"
 USERNAME = "asterisk"
 PASSWORD = "asterisk"
+TRUNK_NAME = "voip_issabel"  # Nombre del trunk SIP
 
 logging.basicConfig(
     filename="/tmp/shared_openai/ari_app.log",
@@ -43,34 +44,32 @@ class LlamadorAutomatico:
             self.session = None
 
     async def iniciar_llamada(self):
-        """Inicia una llamada saliente al número especificado"""
+        """Inicia una llamada saliente usando el trunk SIP"""
         try:
-            # Primero verificamos que el archivo de audio existe
-            if not os.path.exists(AUDIO_PATH):
-                logging.error(f"Archivo de audio no encontrado: {AUDIO_PATH}")
-                return False
-
             url = f"{ARI_URL}/channels"
             data = {
-                "endpoint": f"SIP/{DESTINATION_NUMBER}",
+                "endpoint": f"SIP/{TRUNK_NAME}/{DESTINATION_NUMBER}",
                 "app": "openai-app",
                 "callerId": "\"Llamada Automatica\" <3241000752>",
                 "variables": {
+                    "CHANNEL(language)": "es",
                     "CHANNEL(audioreadformat)": "ulaw",
                     "CHANNEL(audiowriteformat)": "ulaw"
                 }
             }
 
-            logging.info(f"Iniciando llamada a {DESTINATION_NUMBER}")
+            logging.info(f"Iniciando llamada a {DESTINATION_NUMBER} via trunk {TRUNK_NAME}")
+            logging.debug(f"Datos de la llamada: {json.dumps(data, indent=2)}")
+
             async with self.session.post(url, json=data) as response:
+                response_text = await response.text()
                 if response.status == 200:
-                    response_data = await response.json()
+                    response_data = json.loads(response_text)
                     self.call_id = response_data['id']
                     logging.info(f"Llamada iniciada: {self.call_id}")
                     return True
                 else:
-                    error = await response.text()
-                    logging.error(f"Error iniciando llamada: {error}")
+                    logging.error(f"Error iniciando llamada: {response_text}")
                     return False
 
         except Exception as e:
@@ -78,31 +77,35 @@ class LlamadorAutomatico:
             return False
 
     async def reproducir_audio(self):
-        """Reproduce el archivo de audio en el canal"""
-        try:
-            if not self.audio_started and self.active_channel:
+        """Reproduce el archivo de audio"""
+        if not self.audio_started and self.active_channel:
+            try:
                 url = f"{ARI_URL}/channels/{self.active_channel}/play"
                 data = {
-                    "media": AUDIO_PATH
+                    "media": "sound:morosos"
                 }
-
+ 
                 async with self.session.post(url, json=data) as response:
                     response_text = await response.text()
-                    if response.status == 200:
+                    logging.debug(f"Respuesta de reproducción de audio: {response_text}")
+                    if True:
                         playback = json.loads(response_text)
                         self.playback_map[playback['id']] = self.active_channel
                         self.audio_started = True
                         logging.info(f"Reproduciendo audio en canal {self.active_channel}")
-                    else:
-                        logging.error(f"Error reproduciendo audio: {response_text}")
-                        await self.finalizar_llamada()
+                   
+                    # else:
+                    #     logging.error(f"Error reproduciendo audio: {response_text}")
+                    #     logging.error(f"Data: {json.dumps(data, indent=2)}")
+                    #     # await self.finalizar_llamada()
 
-        except Exception as e:
-            logging.error(f"Error en reproducir_audio: {e}")
-            await self.finalizar_llamada()
+
+            except Exception as e:
+                logging.error(f"Error en reproducir_audio: {e}")
+                await self.finalizar_llamada()
 
     async def manejar_eventos(self, websocket):
-        """Procesa eventos de la llamada"""
+        """Procesa eventos de WebSocket"""
         try:
             async for mensaje in websocket:
                 evento = json.loads(mensaje)
@@ -112,7 +115,6 @@ class LlamadorAutomatico:
                 if tipo == 'StasisStart':
                     self.active_channel = evento['channel']['id']
                     logging.info(f"Canal activo: {self.active_channel}")
-                    # Esperamos que el canal esté listo
                     await asyncio.sleep(1)
                     await self.reproducir_audio()
 
@@ -120,17 +122,13 @@ class LlamadorAutomatico:
                     playback_id = evento['playback']['id']
                     if playback_id in self.playback_map:
                         logging.info("Audio reproducido completamente")
-                        await asyncio.sleep(2)  # Esperamos un poco antes de colgar
+                        await asyncio.sleep(2)
                         await self.finalizar_llamada()
 
                 elif tipo == 'StasisEnd':
                     if evento.get('channel', {}).get('id') == self.active_channel:
                         logging.info("Llamada terminada por el destino")
                         self.active_channel = None
-
-                elif tipo == 'ChannelDestroyed':
-                    channel_id = evento.get('channel', {}).get('id')
-                    logging.info(f"Canal destruido: {channel_id}")
 
                 elif tipo == 'ChannelStateChange':
                     state = evento.get('channel', {}).get('state')
