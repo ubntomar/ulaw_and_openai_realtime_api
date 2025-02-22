@@ -6,6 +6,27 @@ import websockets
 import json
 import os
 
+# IMPORTANTE: Este script debe usar el siguiente Dialplan en Asterisk para funcionar correctamente.
+#El siguiente es el Dialplan que se debe configurar en el archivo extensions.conf de Asterisk
+#para que el script funcione correctamente. Este Dialplan se encarga de reproducir el audio
+#para usuarios  morosos 
+
+
+# [from-voip]
+# exten => _X.,1,NoOp(Llamada saliente a ${EXTEN})
+#     same => n,Set(CHANNEL(audioreadformat)=ulaw)
+#     same => n,Set(CHANNEL(audiowriteformat)=ulaw)
+#     same => n,Dial(SIP/voip_issabel/${EXTEN})
+#     same => n,Stasis(openai-app)
+#     same => n,Hangup()
+
+# [stasis-openai]
+# exten => _X.,1,NoOp(Llamada en Stasis: ${EXTEN})
+#     same => n,Answer()
+#     same => n,Wait(1)
+#     same => n,Return()
+
+
 # Configuración
 DESTINATION_NUMBER = "573147654655"  # Número con prefijo del país
 AUDIO_PATH = "file:///tmp/morosos_telefono.wav"
