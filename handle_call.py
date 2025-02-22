@@ -24,6 +24,7 @@ import base64
 # IMPORTANTE: Este script debe usar el siguiente Dialplan en Asterisk para funcionar correctamente.
 # Configuración de dialplan  para handle_call.py ......
 # root@vpsserver2024:/home/omar# cat /etc/asterisk/extensions.conf
+
 # [from-voip]
 # exten => 3241000752,1,Answer()
 #     same => n,Set(CHANNEL(audioreadformat)=ulaw)
@@ -34,6 +35,7 @@ import base64
 # [stasis-openai]
 # exten => external_start,1,NoOp(External Media iniciado)
 #     same => n,Return()
+
 #Reiniciar el dialplan de asterisk para que los cambios surtan efecto
 # xxx#sudo  asterisk -rx "dialplan reload"
 

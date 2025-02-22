@@ -26,14 +26,25 @@ import os
 #     same => n,Wait(1)
 #     same => n,Return()
 
+#Reiniciar el dialplan de asterisk para que los cambios surtan efecto
+# xxx#sudo  asterisk -rx "dialplan reload"
+
+
+
 
 # Configuración
 DESTINATION_NUMBER = "573147654655"  # Número con prefijo del país
 AUDIO_PATH = "file:///tmp/morosos_telefono.wav"
 ARI_URL = "http://localhost:8088/ari"
 WEBSOCKET_URL = "ws://localhost:8088/ari/events"
-USERNAME = "asterisk"
-PASSWORD = "-Agwist2017Ubnt1234"
+USERNAME = os.getenv('ASTERISK_USERNAME')
+PASSWORD = os.getenv('ASTERISK_PASSWORD')
+
+if not USERNAME or not PASSWORD:
+    logging.error("Environment variables ASTERISK_USERNAME and ASTERISK_PASSWORD must be set")
+    exit(1)
+
+
 TRUNK_NAME = "voip_issabel"  # Nombre del trunk SIP
 
 logging.basicConfig(
