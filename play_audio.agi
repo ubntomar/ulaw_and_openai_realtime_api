@@ -1,0 +1,85 @@
+#!/usr/bin/env python3
+import sys
+import os
+import logging
+import time
+from datetime import datetime
+
+# Configuración del logging
+LOG_FILE = "/tmp/agi_debug.log"
+logging.basicConfig(
+    filename=LOG_FILE,
+    level=logging.DEBUG,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+
+def log_time(message):
+    """Registra el mensaje con el tiempo actual"""
+    current_time = time.strftime("%H:%M:%S")
+    logging.info(f"[{current_time}] {message}")
+
+def read_all_headers():
+    """Lee todos los headers hasta encontrar una línea en blanco"""
+    while True:
+        line = sys.stdin.readline().strip()
+        if not line:
+            break
+        log_time(f"Header: {line}")
+
+try:
+    # Inicializar la comunicación con Asterisk
+    fd = sys.stderr.fileno()
+    sys.stderr = sys.stdout
+    
+    log_time("=== Inicio de nueva llamada ===")
+    
+    # Leer headers iniciales
+    read_all_headers()
+    
+    # Espera inicial
+    log_time("Iniciando espera de 5 segundos")
+    sys.stdout.write("EXEC Wait 5\n")
+    sys.stdout.flush()
+    response = sys.stdin.readline().strip()
+    log_time(f"Respuesta Wait inicial: {response}")
+    time.sleep(5)  # Asegurar la espera
+    log_time("Fin de espera inicial")
+
+    # Reproducir tono de prueba
+    log_time("Iniciando reproducción de tono de prueba")
+    sys.stdout.write("EXEC PLAYBACK /var/lib/asterisk/sounds/test1000\n")
+    sys.stdout.flush()
+    response = sys.stdin.readline().strip()
+    log_time(f"Respuesta tono de prueba: {response}")
+    time.sleep(3)  # Dar tiempo para reproducción
+
+    # Segunda espera
+    log_time("Iniciando espera intermedia de 5 segundos")
+    sys.stdout.write("EXEC Wait 5\n")
+    sys.stdout.flush()
+    response = sys.stdin.readline().strip()
+    log_time(f"Respuesta Wait intermedio: {response}")
+    time.sleep(5)  # Asegurar la espera
+    log_time("Fin de espera intermedia")
+
+    # Reproducir archivo principal
+    log_time("Iniciando reproducción de archivo principal")
+    sys.stdout.write("EXEC PLAYBACK /var/lib/asterisk/sounds/openai_response\n")
+    sys.stdout.flush()
+    response = sys.stdin.readline().strip()
+    log_time(f"Respuesta archivo principal: {response}")
+    time.sleep(3)  # Dar tiempo para reproducción
+
+    # Espera final
+    log_time("Iniciando espera final de 5 segundos")
+    sys.stdout.write("EXEC Wait 5\n")
+    sys.stdout.flush()
+    response = sys.stdin.readline().strip()
+    log_time(f"Respuesta Wait final: {response}")
+    time.sleep(5)  # Asegurar la espera
+    log_time("Fin de espera final")
+
+except Exception as e:
+    logging.error(f"Error en la ejecución: {str(e)}", exc_info=True)
+finally:
+    log_time("=== Fin de la llamada ===")
