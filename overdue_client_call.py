@@ -12,7 +12,7 @@ AUDIO_PATH = "file:///tmp/morosos_telefono.wav"
 ARI_URL = "http://localhost:8088/ari"
 WEBSOCKET_URL = "ws://localhost:8088/ari/events"
 USERNAME = "asterisk"
-PASSWORD = "asterisk"
+PASSWORD = "-Agwist2017Ubnt1234"
 TRUNK_NAME = "voip_issabel"  # Nombre del trunk SIP
 
 logging.basicConfig(

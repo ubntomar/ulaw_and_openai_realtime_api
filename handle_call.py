@@ -80,17 +80,32 @@ ASTERISK_PASSWORD = env_vars['ASTERISK_PASSWORD']
 LOG_FILE_PATH = env_vars['LOG_FILE_PATH']
 LOCAL_IP_ADDRESS = env_vars['LOCAL_IP_ADDRESS']
 
+# Verificar que el directorio existe
+log_dir = os.path.dirname(LOG_FILE_PATH)
+if not os.path.exists(log_dir):
+    os.makedirs(log_dir)
 
-#Configuración de logging principal para handle_call.py .....
+# Configuración más detallada del logging
 logging.basicConfig(
     filename=LOG_FILE_PATH,
     level=logging.DEBUG,
     format='%(asctime)s.%(msecs)03d - %(levelname)s - %(funcName)s - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
+    datefmt='%Y-%m-%d %H:%M:%S',
+    force=True  # Forzar la configuración
 )
 
+# # Añadir también un handler para la consola
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.DEBUG)
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+console_handler.setFormatter(formatter)
+logging.getLogger('').addHandler(console_handler)
 
 
+print("Intentando escribir en log...")
+logging.info("=== TEST LOG ENTRY ===")
+logging.error("=== TEST ERROR ENTRY ===")
+print(f"Log file path: {LOG_FILE_PATH}")
 
 
 
