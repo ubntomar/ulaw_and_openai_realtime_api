@@ -6,35 +6,94 @@ import websockets
 import json
 import os
 
-# IMPORTANTE: Este script debe usar el siguiente Dialplan en Asterisk para funcionar correctamente.
-#El siguiente es el Dialplan que se debe configurar en el archivo extensions.conf de Asterisk
-#para que el script funcione correctamente. Este Dialplan se encarga de reproducir el audio
-#para usuarios  morosos 
-
-
-# [from-voip]
-# exten => _X.,1,NoOp(Llamada saliente a ${EXTEN})
-#     same => n,Set(CHANNEL(audioreadformat)=ulaw)
-#     same => n,Set(CHANNEL(audiowriteformat)=ulaw)
-#     same => n,Dial(SIP/voip_issabel/${EXTEN})
-#     same => n,Stasis(openai-app)
-#     same => n,Hangup()
-
-# [stasis-openai]
-# exten => _X.,1,NoOp(Llamada en Stasis: ${EXTEN})
-#     same => n,Answer()
-#     same => n,Wait(1)
-#     same => n,Return()
-
-#Reiniciar el dialplan de asterisk para que los cambios surtan efecto
-# xxx#sudo  asterisk -rx "dialplan reload"
-
+# CONDICIONES PARA EJECUTAR CORRECTAMENTE EL SCRIPT overdue_client_call.py
+#
+# 1. CONFIGURACIÓN DEL DIALPLAN
+#    - El archivo /etc/asterisk/extensions.conf debe tener configurados los contextos [from-voip] y [stasis-openai]
+#    - El dialplan debe estar activo (usar "sudo asterisk -rx 'dialplan reload'" si se hacen cambios)
+#
+# 2. VARIABLES DE ENTORNO
+#    - Las variables ASTERISK_USERNAME y ASTERISK_PASSWORD deben estar configuradas
+#    - Estas credenciales deben tener permisos para acceder a la API de Asterisk
+#
+# 3. ARCHIVOS DE AUDIO
+#    - Los archivos de audio deben estar en formato .gsm
+#    - Deben estar ubicados en /var/lib/asterisk/sounds/es_MX/
+#    - El archivo debe llamarse "morosos.gsm" (o tener el nombre usado en "media": "sound:morosos")
+#    - Los archivos deben tener permisos de lectura para el usuario asterisk (generalmente 644 o -rw-r--r--)
+#    - El propietario debe ser asterisk:asterisk (chown asterisk:asterisk /var/lib/asterisk/sounds/es_MX/morosos.gsm)
+#
+# 4. CONECTIVIDAD
+#    - El servicio Asterisk debe estar ejecutándose
+#    - La API ARI debe estar habilitada en la URL http://localhost:8088/ari
+#    - El WebSocket debe estar disponible en ws://localhost:8088/ari/events
+#
+# 5. CONFIGURACIÓN SIP
+#    - El trunk SIP "voip_issabel" debe estar configurado y funcional
+#    - El destino (DESTINATION_NUMBER = "573162950915") debe ser alcanzable desde el trunk
+#
+# 6. PERMISOS
+#    - El usuario que ejecuta el script debe tener permisos para conectarse a la API y WebSocket
+#    - El usuario debe estar en el grupo de asterisk o tener permisos sudo
+#    - El archivo del script debe tener permisos de ejecución (chmod +x overdue_client_call.py)
+#    - Si se usa para programar tareas, el crontab debe ejecutarse con el usuario correcto
+#
+# 7. DEPENDENCIAS
+#    - Las bibliotecas aiohttp, websockets, asyncio deben estar instaladas
+#    - Python 3.7+ para soporte de asyncio
+#
+# 8. APLICACIÓN ARI
+#    - La aplicación "openai-app" debe estar definida en Asterisk
+#    - La aplicación debe tener permisos para controlar canales y reproducir audio
+#    - Verificar configuración en ari.conf (/etc/asterisk/ari.conf)
+#
+# 9. CONFIGURACIÓN DE CANAL
+#    - El canal debe tener idioma configurado a "es" para encontrar los archivos de audio en español
+#    - Los formatos de audio deben ser compatibles (aunque el script usa ulaw, Asterisk está usando gsm)
+#
+# 10. REINICIO DE SERVICIOS
+#     - Para recargar el dialplan sin reiniciar: sudo asterisk -rx "dialplan reload"
+#     - Para reiniciar completamente Asterisk: sudo systemctl restart asterisk
+#     - Si hay cambios en ari.conf: sudo systemctl restart asterisk
+#     - Si hay problemas con la API: sudo systemctl restart asterisk
+#     - Para verificar el estado del servicio: sudo systemctl status asterisk
+#     - Si el servicio no arranca: sudo journalctl -u asterisk para ver los errores
+#
+# 11. PERMISOS DE DIRECTORIOS
+#     - El directorio /var/lib/asterisk/sounds/ debe tener permisos 755 (drwxr-xr-x)
+#     - El directorio /var/lib/asterisk/sounds/es_MX/ debe tener permisos 755 (drwxr-xr-x)
+#     - Si se crean directorios personalizados, usar: sudo chown -R asterisk:asterisk /ruta/al/directorio
+#
+# 12. CONVERSIÓN DE FORMATOS DE AUDIO A GSM USANDO FFMPEG
+#     - Instalar ffmpeg si no está instalado: sudo apt-get install ffmpeg
+#
+#     # Convertir de WAV a GSM (ideal que el WAV sea 8kHz, mono, 16-bit)
+#     - Para archivos WAV: ffmpeg -i input.wav -ar 8000 -ac 1 -acodec gsm output.gsm
+#     
+#     # Convertir de MP3 a GSM (con remuestreo a 8kHz)
+#     - Para archivos MP3: ffmpeg -i input.mp3 -ar 8000 -ac 1 -acodec gsm output.gsm
+#     
+#     # Para convertir un archivo y colocarlo directamente en la carpeta de sonidos de Asterisk
+#     - ffmpeg -i input.mp3 -ar 8000 -ac 1 -acodec gsm /var/lib/asterisk/sounds/es_MX/morosos.gsm
+#     
+#     # Convertir múltiples archivos a la vez
+#     - for file in *.mp3; do ffmpeg -i "$file" -ar 8000 -ac 1 -acodec gsm "${file%.mp3}.gsm"; done
+#     
+#     # Verificar si el archivo GSM es válido (decodificarlo)
+#     - ffmpeg -i output.gsm -f wav - | aplay
+#     
+#     # Optimizar la calidad del audio antes de la conversión a GSM
+#     - ffmpeg -i input.mp3 -af "highpass=f=300, lowpass=f=3400, volume=2" -ar 8000 -ac 1 -acodec gsm output.gsm
+#
+#     # Después de convertir, asegurarse de cambiar el propietario:
+#     - sudo chown asterisk:asterisk /var/lib/asterisk/sounds/es_MX/output.gsm
+#     - sudo chmod 644 /var/lib/asterisk/sounds/es_MX/output.gsm
 
 
 
 # Configuración
-DESTINATION_NUMBER = "573162950915"  # Número con prefijo del país
-AUDIO_PATH = "file:///usr/share/asterisk/sounds/es_MX/morosos2"  # Ruta del archivo de audio
+DESTINATION_NUMBER = "573162950915"  # Número con prefijo del país 57xxxxxxxxx
+AUDIO_PATH = "file:///var/lib/asterisk/sounds/morosos_ulaw.wav"  # Ruta del archivo de audio
 ARI_URL = "http://localhost:8088/ari"
 WEBSOCKET_URL = "ws://localhost:8088/ari/events"
 USERNAME = os.getenv('ASTERISK_USERNAME')
@@ -85,8 +144,8 @@ class LlamadorAutomatico:
                 "callerId": "\"Llamada Automatica\" <3241000752>",
                 "variables": {
                     "CHANNEL(language)": "es",
-                    "CHANNEL(audioreadformat)": "ulaw",
-                    "CHANNEL(audiowriteformat)": "ulaw"
+                    # "CHANNEL(audioreadformat)": "ulaw",
+                    # "CHANNEL(audiowriteformat)": "ulaw"
                 }
             }
 
@@ -114,9 +173,9 @@ class LlamadorAutomatico:
             try:
                 url = f"{ARI_URL}/channels/{self.active_channel}/play"
                 data = {
-                    "media": "sound:morosos" #reproduce los audios .gsm almacenados en la carpeta /var/lib/asterisk/sounds/es_MX   
+                    "media": "sound:morosos2" 
                 }
-                #"media": "sound:morosos2"
+                #"media": "sound:morosos2"  #reproduce los audios .gsm almacenados en la carpeta /var/lib/asterisk/sounds/es_MX 
                 async with self.session.post(url, json=data) as response:
                     response_text = await response.text()
                     logging.debug(f"Respuesta de reproducción de audio: {response_text}")
