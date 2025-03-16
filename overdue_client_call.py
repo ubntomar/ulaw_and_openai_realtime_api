@@ -33,8 +33,8 @@ import os
 
 
 # Configuración
-DESTINATION_NUMBER = "573147654655"  # Número con prefijo del país
-AUDIO_PATH = "file:///tmp/morosos_telefono.wav"
+DESTINATION_NUMBER = "573162950915"  # Número con prefijo del país
+AUDIO_PATH = "file:///usr/share/asterisk/sounds/es_MX/morosos2"  # Ruta del archivo de audio
 ARI_URL = "http://localhost:8088/ari"
 WEBSOCKET_URL = "ws://localhost:8088/ari/events"
 USERNAME = os.getenv('ASTERISK_USERNAME')
@@ -48,7 +48,7 @@ if not USERNAME or not PASSWORD:
 TRUNK_NAME = "voip_issabel"  # Nombre del trunk SIP
 
 logging.basicConfig(
-    filename="/tmp/shared_openai/ari_app.log",
+    # filename="/tmp/shared_openai/ari_app.log",
     level=logging.DEBUG,
     format='%(asctime)s.%(msecs)03d - %(levelname)s - %(funcName)s - %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
@@ -114,22 +114,22 @@ class LlamadorAutomatico:
             try:
                 url = f"{ARI_URL}/channels/{self.active_channel}/play"
                 data = {
-                    "media": "sound:morosos"
+                    "media": "sound:morosos" #reproduce los audios .gsm almacenados en la carpeta /var/lib/asterisk/sounds/es_MX   
                 }
- 
+                #"media": "sound:morosos2"
                 async with self.session.post(url, json=data) as response:
                     response_text = await response.text()
                     logging.debug(f"Respuesta de reproducción de audio: {response_text}")
-                    if True:
+                    if response.status == 201:
                         playback = json.loads(response_text)
                         self.playback_map[playback['id']] = self.active_channel
                         self.audio_started = True
                         logging.info(f"Reproduciendo audio en canal {self.active_channel}")
                    
-                    # else:
-                    #     logging.error(f"Error reproduciendo audio: {response_text}")
-                    #     logging.error(f"Data: {json.dumps(data, indent=2)}")
-                    #     # await self.finalizar_llamada()
+                    else:
+                        logging.error(f"Error reproduciendo audio: {response_text}")
+                        logging.error(f"Data: {json.dumps(data, indent=2)}")
+                        await self.finalizar_llamada()
 
 
             except Exception as e:
