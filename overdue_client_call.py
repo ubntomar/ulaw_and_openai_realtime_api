@@ -18,10 +18,10 @@ import os
 #
 # 3. ARCHIVOS DE AUDIO
 #    - Los archivos de audio deben estar en formato .gsm
-#    - Deben estar ubicados en /var/lib/asterisk/sounds/es_MX/
+#    - Deben estar ubicados en /usr/share/asterisk/sounds/es_MX/
 #    - El archivo debe llamarse "morosos.gsm" (o tener el nombre usado en "media": "sound:morosos")
 #    - Los archivos deben tener permisos de lectura para el usuario asterisk (generalmente 644 o -rw-r--r--)
-#    - El propietario debe ser asterisk:asterisk (chown asterisk:asterisk /var/lib/asterisk/sounds/es_MX/morosos.gsm)
+#    - El propietario debe ser asterisk:asterisk (chown asterisk:asterisk /usr/share/asterisk/sounds/es_MX/morosos.gsm)
 #
 # 4. CONECTIVIDAD
 #    - El servicio Asterisk debe estar ejecutándose
@@ -43,7 +43,7 @@ import os
 #    - Python 3.7+ para soporte de asyncio
 #
 # 8. APLICACIÓN ARI
-#    - La aplicación "openai-app" debe estar definida en Asterisk
+#    - La aplicación "overdue-app" debe estar definida en Asterisk
 #    - La aplicación debe tener permisos para controlar canales y reproducir audio
 #    - Verificar configuración en ari.conf (/etc/asterisk/ari.conf)
 #
@@ -60,8 +60,8 @@ import os
 #     - Si el servicio no arranca: sudo journalctl -u asterisk para ver los errores
 #
 # 11. PERMISOS DE DIRECTORIOS
-#     - El directorio /var/lib/asterisk/sounds/ debe tener permisos 755 (drwxr-xr-x)
-#     - El directorio /var/lib/asterisk/sounds/es_MX/ debe tener permisos 755 (drwxr-xr-x)
+#     - El directorio /usr/share/asterisk/sounds/ debe tener permisos 755 (drwxr-xr-x)
+#     - El directorio /usr/share/asterisk/sounds/es_MX/ debe tener permisos 755 (drwxr-xr-x)
 #     - Si se crean directorios personalizados, usar: sudo chown -R asterisk:asterisk /ruta/al/directorio
 #
 # 12. CONVERSIÓN DE FORMATOS DE AUDIO A GSM USANDO FFMPEG
@@ -74,7 +74,7 @@ import os
 #     - Para archivos MP3: ffmpeg -i input.mp3 -ar 8000 -ac 1 -acodec gsm output.gsm
 #     
 #     # Para convertir un archivo y colocarlo directamente en la carpeta de sonidos de Asterisk
-#     - ffmpeg -i input.mp3 -ar 8000 -ac 1 -acodec gsm /var/lib/asterisk/sounds/es_MX/morosos.gsm
+#     - ffmpeg -i input.mp3 -ar 8000 -ac 1 -acodec gsm /usr/share/asterisk/sounds/es_MX/morosos.gsm
 #     
 #     # Convertir múltiples archivos a la vez
 #     - for file in *.mp3; do ffmpeg -i "$file" -ar 8000 -ac 1 -acodec gsm "${file%.mp3}.gsm"; done
@@ -86,18 +86,17 @@ import os
 #     - ffmpeg -i input.mp3 -af "highpass=f=300, lowpass=f=3400, volume=2" -ar 8000 -ac 1 -acodec gsm output.gsm
 #
 #     # Después de convertir, asegurarse de cambiar el propietario:
-#     - sudo chown asterisk:asterisk /var/lib/asterisk/sounds/es_MX/output.gsm
-#     - sudo chmod 644 /var/lib/asterisk/sounds/es_MX/output.gsm
-
+#     - sudo chown asterisk:asterisk /usr/share/asterisk/sounds/es_MX/output.gsm
+#     - sudo chmod 644 /usr/share/asterisk/sounds/es_MX/output.gsm
 
 
 # Configuración
 DESTINATION_NUMBER = "573162950915"  # Número con prefijo del país 57xxxxxxxxx
-AUDIO_PATH = "file:///var/lib/asterisk/sounds/morosos_ulaw.wav"  # Ruta del archivo de audio
 ARI_URL = "http://localhost:8088/ari"
 WEBSOCKET_URL = "ws://localhost:8088/ari/events"
 USERNAME = os.getenv('ASTERISK_USERNAME')
 PASSWORD = os.getenv('ASTERISK_PASSWORD')
+AUDIO_FILE = "morosos"  # Nombre del archivo de audio a reproducir
 
 if not USERNAME or not PASSWORD:
     logging.error("Environment variables ASTERISK_USERNAME and ASTERISK_PASSWORD must be set")
@@ -140,7 +139,7 @@ class LlamadorAutomatico:
             url = f"{ARI_URL}/channels"
             data = {
                 "endpoint": f"SIP/{TRUNK_NAME}/{DESTINATION_NUMBER}",
-                "app": "openai-app",
+                "app": "overdue-app",
                 "callerId": "\"Llamada Automatica\" <3241000752>",
                 "variables": {
                     "CHANNEL(language)": "es",
@@ -173,9 +172,8 @@ class LlamadorAutomatico:
             try:
                 url = f"{ARI_URL}/channels/{self.active_channel}/play"
                 data = {
-                    "media": "sound:morosos2" 
+                    "media": f"sound:{AUDIO_FILE}"
                 }
-                #"media": "sound:morosos2"  #reproduce los audios .gsm almacenados en la carpeta /var/lib/asterisk/sounds/es_MX 
                 async with self.session.post(url, json=data) as response:
                     response_text = await response.text()
                     logging.debug(f"Respuesta de reproducción de audio: {response_text}")
@@ -252,7 +250,7 @@ class LlamadorAutomatico:
         try:
             await self.setup_session()
             async with websockets.connect(
-                f"{WEBSOCKET_URL}?api_key={USERNAME}:{PASSWORD}&app=openai-app",
+                f"{WEBSOCKET_URL}?api_key={USERNAME}:{PASSWORD}&app=overdue-app",
                 ping_interval=30,
                 ping_timeout=10
             ) as websocket:
