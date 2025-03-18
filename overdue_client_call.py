@@ -10,7 +10,7 @@ import time
 from datetime import datetime, timedelta
 
 # Configuration
-DESTINATION_NUMBER = "573162950915"  # Phone number with country prefix 57xxxxxxxxx
+DESTINATION_NUMBER = "5731476546555"  # Phone number with country prefix 57xxxxxxxxx
 ARI_URL = "http://localhost:8088/ari"
 WEBSOCKET_URL = "ws://localhost:8088/ari/events"
 USERNAME = os.getenv('ASTERISK_USERNAME')
@@ -18,9 +18,9 @@ PASSWORD = os.getenv('ASTERISK_PASSWORD')
 AUDIO_FILE = "morosos"  # Audio file name to play
 
 # Retry configuration
-MAX_RETRIES = 5  # Maximum number of attempts for a failed call
+MAX_RETRIES = 3  # Maximum number of attempts for a failed call
 RETRY_DELAY = 120  # Time in seconds between retries (2 minutes)
-CALL_TIMEOUT = 60  # Maximum time in seconds to wait for a call to be answered
+CALL_TIMEOUT = 90  # Maximum time in seconds to wait for a call to be answered
 AUDIO_START_TIMEOUT = 15  # Maximum time in seconds to wait for audio to start playing
 MAX_SILENT_CALL_DURATION = 20  # Maximum time in seconds to keep a call without audio
 
