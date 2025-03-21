@@ -623,37 +623,61 @@ class CallManager:
         try:
             cursor = conn.cursor(dictionary=True)
             
-            # Query to find clients with outbound_call=1
+            # Obtener la fecha actual para la comparación del día de corte
+            current_day = datetime.now().day
+            logging.info(f"Día actual: {current_day}")
+            
+            # Query para encontrar clientes con outbound_call=1, que tengan deudas pendientes 
+            # y cuyo día de corte sea válido para llamar
             query = """
-            SELECT id, telefono, outbound_call_attempts 
-            FROM afiliados 
-            WHERE outbound_call = 1 
-            AND outbound_call_is_sent = 0
-            ORDER BY id
+            SELECT a.id, a.telefono, a.outbound_call_attempts, a.corte,
+                   SUM(CASE WHEN f.cerrado = 0 THEN f.saldo ELSE 0 END) AS deuda_total
+            FROM afiliados a
+            LEFT JOIN factura f ON a.id = f.id_afiliado
+            WHERE a.outbound_call = 1 
+            AND a.outbound_call_is_sent = 0
+            GROUP BY a.id, a.telefono, a.outbound_call_attempts, a.corte
+            HAVING deuda_total > 0
+            ORDER BY a.id
             """
             
             cursor.execute(query)
             results = cursor.fetchall()
             
-            logging.info(f"Found {len(results)} pending calls in database")
+            logging.info(f"Found {len(results)} pending calls in database with unpaid bills")
             
             self.pending_calls = []
             for row in results:
                 user_id = row['id']
                 phone = row['telefono'].strip() if row['telefono'] else ""
                 attempts = row['outbound_call_attempts'] or 0
+                corte = row['corte']
+                deuda_total = row['deuda_total']
+                
+                # Verificar el día de corte
+                if corte and corte.isdigit():
+                    corte_day = int(corte)
+                    
+                    # Comprobar si estamos al menos un día antes del corte o si el corte ya pasó
+                    is_valid_call_day = (current_day + 1 < corte_day) or (current_day > corte_day)
+                    
+                    if not is_valid_call_day:
+                        logging.info(f"Usuario {user_id} no será llamado - día actual ({current_day}) muy cercano al día de corte ({corte_day})")
+                        continue
                 
                 # Específica validación para números móviles colombianos (10 dígitos)
                 if phone and len(phone) == 10 and phone.startswith('3'):
                     # Formato correcto: agregar prefijo país 57
                     formatted_phone = '57' + phone
                     
-                    logging.info(f"Número móvil válido para usuario {user_id}: {phone} → {formatted_phone}")
+                    logging.info(f"Usuario {user_id} - Número: {formatted_phone} - Deuda: {deuda_total} - Día de corte: {corte}")
                     
                     self.pending_calls.append({
                         "user_id": user_id,
                         "phone_number": formatted_phone,
-                        "attempts": attempts
+                        "attempts": attempts,
+                        "deuda_total": deuda_total,
+                        "corte": corte
                     })
                 else:
                     logging.warning(f"Número de teléfono inválido para usuario {user_id}: '{phone}' - debe ser un móvil de 10 dígitos que comience con 3")
