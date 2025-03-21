@@ -659,11 +659,14 @@ class CallManager:
                 if corte and corte.isdigit():
                     corte_day = int(corte)
                     
-                    # Comprobar si estamos al menos un día antes del corte o si el corte ya pasó
-                    is_valid_call_day = (current_day + 1 < corte_day) or (current_day > corte_day)
+                    # Comprobar si:
+                    # 1. Estamos un día antes del corte (ej: hoy 14, corte 15)
+                    # 2. Estamos en el día del corte (ej: hoy 15, corte 15)
+                    # 3. Ya pasó el día de corte (ej: hoy 20, corte 15)
+                    is_valid_call_day = (current_day == corte_day - 1) or (current_day >= corte_day)
                     
                     if not is_valid_call_day:
-                        logging.info(f"Usuario {user_id} no será llamado - día actual ({current_day}) muy cercano al día de corte ({corte_day})")
+                        logging.info(f"Usuario {user_id} no será llamado - día actual ({current_day}) está a más de un día del corte ({corte_day})")
                         continue
                 
                 # Específica validación para números móviles colombianos (10 dígitos)
