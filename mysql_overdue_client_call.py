@@ -629,11 +629,12 @@ class CallManager:
             
             # Query para encontrar clientes con outbound_call=1, que tengan deudas pendientes 
             # y cuyo día de corte sea válido para llamar
+            # Nota: Utilizando el nombre correcto del campo id-afiliado con comillas invertidas
             query = """
             SELECT a.id, a.telefono, a.outbound_call_attempts, a.corte,
                    SUM(CASE WHEN f.cerrado = 0 THEN f.saldo ELSE 0 END) AS deuda_total
             FROM afiliados a
-            LEFT JOIN factura f ON a.id = f.id_afiliado
+            LEFT JOIN factura f ON a.id = f.`id-afiliado`
             WHERE a.outbound_call = 1 
             AND a.outbound_call_is_sent = 0
             GROUP BY a.id, a.telefono, a.outbound_call_attempts, a.corte
