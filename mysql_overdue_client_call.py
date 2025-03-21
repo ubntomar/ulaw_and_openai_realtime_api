@@ -16,7 +16,7 @@ ARI_URL = "http://localhost:8088/ari"
 WEBSOCKET_URL = "ws://localhost:8088/ari/events"
 USERNAME = os.getenv('ASTERISK_USERNAME')
 PASSWORD = os.getenv('ASTERISK_PASSWORD')
-AUDIO_FILE = "morosos"  # Audio file name to play
+AUDIO_FILE = "morosos_natalia"  # Audio file name to play
 
 # MySQL Configuration from environment variables
 MYSQL_DATABASE = os.getenv('MYSQL_DATABASE')
