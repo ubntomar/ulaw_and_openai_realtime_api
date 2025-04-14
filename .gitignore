@@ -6,3 +6,6 @@
 
 # Permitir .gitignore para no perderlo
 !.gitignore
+
+!outbound_calls/
+!inbound_calls/
