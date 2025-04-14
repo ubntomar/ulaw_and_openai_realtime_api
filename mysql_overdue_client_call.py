@@ -637,6 +637,7 @@ class CallManager:
             LEFT JOIN factura f ON a.id = f.`id-afiliado`
             WHERE a.outbound_call = 1 
             AND a.outbound_call_is_sent = 0
+            AND a.id = 1308
             GROUP BY a.id, a.telefono, a.outbound_call_attempts, a.corte
             HAVING deuda_total > 0
             ORDER BY a.id
