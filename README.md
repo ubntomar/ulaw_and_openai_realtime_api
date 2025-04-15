@@ -1,6 +1,6 @@
 # Sistema de Llamadas Automáticas para Clientes con Pagos Pendientes
 
-Este script Python permite gestionar llamadas automáticas a clientes con facturas pendientes de pago, especialmente enfocadas en los días cercanos a su fecha de corte de servicio.
+Este sistema Python permite gestionar llamadas automáticas a clientes con facturas pendientes de pago, especialmente enfocadas en los días cercanos a su fecha de corte de servicio.
 
 ## Descripción
 
@@ -42,7 +42,7 @@ El script requiere las siguientes variables de entorno:
 
 ### 1. Configuración del Dialplan
 
-El archivo `/etc/asterisk/extensions.conf` debe tener configurados los contextos y extensions necesarios. A continuación se muestra cómo configurar esto:
+El archivo `/etc/asterisk/extensions.conf` debe tener configurados los contextos y extensions necesarios. A continuación se muestra la configuración actualizada:
 
 #### Editar el archivo extensions.conf
 
@@ -50,19 +50,31 @@ El archivo `/etc/asterisk/extensions.conf` debe tener configurados los contextos
 sudo nano /etc/asterisk/extensions.conf
 ```
 
-#### Añadir los siguientes contextos
+#### Configuración actual del dialplan
 
 ```ini
 [from-voip]
+; Regla específica para llamadas entrantes al número específico
+exten => 3241000752,1,Answer()
+    same => n,Set(CHANNEL(audioreadformat)=ulaw)
+    same => n,Set(CHANNEL(audiowriteformat)=ulaw)
+    same => n,Stasis(openai-app)
+    same => n,Hangup()
+    
+; Regla general para llamadas salientes (cualquier otro número)
 exten => _X.,1,NoOp(Llamada saliente a ${EXTEN})
     same => n,Set(CHANNEL(audioreadformat)=ulaw)
     same => n,Set(CHANNEL(audiowriteformat)=ulaw)
     same => n,Dial(SIP/voip_issabel/${EXTEN})
     same => n,Stasis(overdue-app)
     same => n,Hangup()
-
+    
+[stasis-openai]
+exten => external_start,1,NoOp(External Media iniciado para OpenAI)
+    same => n,Return()
+    
 [stasis-overdue]
-exten => _X.,1,NoOp(Llamada en Stasis: ${EXTEN})
+exten => _X.,1,NoOp(Llamada en Stasis para clientes morosos: ${EXTEN})
     same => n,Answer()
     same => n,Wait(1)
     same => n,Return()
@@ -70,12 +82,11 @@ exten => _X.,1,NoOp(Llamada en Stasis: ${EXTEN})
 
 #### Explicación de los contextos:
 
-1. **from-voip**: Este contexto maneja las llamadas entrantes desde el trunk SIP y las redirige al contexto stasis-openai.
+1. **from-voip**: Este contexto maneja tanto las llamadas entrantes al número específico (3241000752) como las llamadas salientes a través del trunk SIP.
 
-2. **stasis-openai**: Este contexto:
-   - Contesta la llamada con `Answer()`
-   - Pasa el control a la aplicación Stasis `overdue-app` (la misma que usa nuestro script)
-   - Cuelga la llamada cuando la aplicación termina
+2. **stasis-openai**: Este contexto maneja las llamadas procesadas por la aplicación openai-app.
+
+3. **stasis-overdue**: Este contexto maneja las llamadas procesadas por la aplicación overdue-app.
 
 #### Aplicar los cambios al dialplan
 
@@ -88,23 +99,22 @@ sudo asterisk -rx 'dialplan reload'
 #### Verificar que el dialplan esté cargado correctamente
 
 ```bash
-sudo asterisk -rx 'dialplan show stasis-openai'
+sudo asterisk -rx 'dialplan show stasis-overdue'
 ```
 
 Este comando debería mostrar el contexto que acabas de crear.
-
 
 ### 2. Archivos de Audio
 
 - Formato: `.gsm`
 - Ubicación: `/usr/share/asterisk/sounds/es_MX/`
-- Nombre del archivo: `morosos.gsm` (o el nombre configurado en el script)
+- Nombre del archivo: `morosos_natalia.gsm` (según configuración actual en el script)
 - Permisos: `644` (-rw-r--r--)
 - Propietario: `asterisk:asterisk`
 
 ```bash
-sudo chown asterisk:asterisk /usr/share/asterisk/sounds/es_MX/morosos.gsm
-sudo chmod 644 /usr/share/asterisk/sounds/es_MX/morosos.gsm
+sudo chown asterisk:asterisk /usr/share/asterisk/sounds/es_MX/morosos_natalia.gsm
+sudo chmod 644 /usr/share/asterisk/sounds/es_MX/morosos_natalia.gsm
 ```
 
 ### 3. Conectividad
@@ -137,18 +147,14 @@ enabled = yes
 pretty = yes
 allowed_origins = *
 
-[username]
+[Asterisk]
 type = user
 read_only = no
 password = your_password
 password_format = plain
 ```
 
-Reemplaza `username` y `your_password` con los valores de `ASTERISK_USERNAME` y `ASTERISK_PASSWORD` que utilizará el script. Estos valores deben coincidir con las variables de entorno.
-
-#### Habilitar la aplicación overdue-app
-
-La aplicación `overdue-app` no necesita configuración adicional en el archivo ari.conf, ya que se registra dinámicamente cuando el script se conecta a la API de Asterisk.
+Reemplaza `Asterisk` y `your_password` con los valores de `ASTERISK_USERNAME` y `ASTERISK_PASSWORD` que utilizará el script. Estos valores deben coincidir con las variables de entorno.
 
 #### Aplicar cambios
 
@@ -163,7 +169,7 @@ sudo systemctl restart asterisk
 Para verificar que la API ARI esté funcionando correctamente:
 
 ```bash
-curl -u username:your_password http://localhost:8088/ari/applications
+curl -u Asterisk:your_password http://localhost:8088/ari/applications
 ```
 
 Debería recibir una respuesta JSON con las aplicaciones registradas.
@@ -195,7 +201,7 @@ ffmpeg -i input.mp3 -ar 8000 -ac 1 -acodec gsm output.gsm
 
 #### Convertir y colocar directamente en Asterisk
 ```bash
-ffmpeg -i input.mp3 -ar 8000 -ac 1 -acodec gsm /usr/share/asterisk/sounds/es_MX/morosos.gsm
+ffmpeg -i input.mp3 -ar 8000 -ac 1 -acodec gsm /usr/share/asterisk/sounds/es_MX/morosos_natalia.gsm
 ```
 
 #### Audio optimizado para telefonía
@@ -205,8 +211,8 @@ ffmpeg -i input.mp3 -af "highpass=f=300, lowpass=f=3400, volume=2" -ar 8000 -ac 
 
 #### Después de convertir
 ```bash
-sudo chown asterisk:asterisk /usr/share/asterisk/sounds/es_MX/output.gsm
-sudo chmod 644 /usr/share/asterisk/sounds/es_MX/output.gsm
+sudo chown asterisk:asterisk /usr/share/asterisk/sounds/es_MX/morosos_natalia.gsm
+sudo chmod 644 /usr/share/asterisk/sounds/es_MX/morosos_natalia.gsm
 ```
 
 ## Lógica del Sistema de Llamadas
@@ -236,14 +242,16 @@ Usuario con corte el día 15:
 
 ### Sistema de Timeout
 
-Para evitar gastos excesivos en llamadas, cada llamada tiene un timeout individual de 300 segundos (5 minutos). Si este tiempo se excede, el script terminará automáticamente.
+Para evitar gastos excesivos en llamadas, cada llamada tiene un timeout individual de 90 segundos. Si este tiempo se excede, el script terminará automáticamente la llamada.
+
+Además, hay un timeout global del script de 300 segundos (5 minutos) más 300 segundos adicionales por usuario, para evitar que el script se ejecute indefinidamente.
 
 ## Ejecución del Script
 
 ### Ejecución Manual
 
 ```bash
-python3 mysql_overdue_client_call.py
+python3 outbound_calls/mysql_overdue_client_call.py
 ```
 
 ### Configuración como Tarea Programada (Cron)
@@ -257,11 +265,10 @@ Para ejecutar el script automáticamente a una hora específica cada día, puede
 
 2. Añade una línea para ejecutar el script a las 8:00 AM todos los días:
    ```bash
-   0 8 * * * cd /ruta/al/script && export ASTERISK_USERNAME=username && export ASTERISK_PASSWORD=password && export MYSQL_DATABASE=database && export MYSQL_PASSWORD=password && export MYSQL_SERVER=server && export MYSQL_USER=user && python3 mysql_overdue_client_call.py >> /tmp/llamadas_automaticas.log 2>&1
+   0 8 * * * cd /usr/local/bin && export ASTERISK_USERNAME=Asterisk && export ASTERISK_PASSWORD=your_password && export MYSQL_DATABASE=database && export MYSQL_PASSWORD=password && export MYSQL_SERVER=server && export MYSQL_USER=user && python3 outbound_calls/mysql_overdue_client_call.py >> /tmp/llamadas_automaticas.log 2>&1
    ```
 
    Asegúrate de reemplazar:
-   - `/ruta/al/script` con la ruta donde se encuentra el script
    - Las variables de entorno con tus valores reales
    - La ruta del log si deseas cambiarlo
 
@@ -285,14 +292,14 @@ Para gestionar el script como un servicio, puedes crear un archivo de servicio s
    [Service]
    Type=simple
    User=asterisk
-   WorkingDirectory=/ruta/al/script
-   Environment="ASTERISK_USERNAME=username"
-   Environment="ASTERISK_PASSWORD=password"
+   WorkingDirectory=/usr/local/bin
+   Environment="ASTERISK_USERNAME=Asterisk"
+   Environment="ASTERISK_PASSWORD=your_password"
    Environment="MYSQL_DATABASE=database"
    Environment="MYSQL_PASSWORD=password"
    Environment="MYSQL_SERVER=server"
    Environment="MYSQL_USER=user"
-   ExecStart=/usr/bin/python3 mysql_overdue_client_call.py
+   ExecStart=/usr/bin/python3 outbound_calls/mysql_overdue_client_call.py
    Restart=on-failure
    RestartSec=60
 
@@ -320,20 +327,77 @@ Para gestionar el script como un servicio, puedes crear un archivo de servicio s
 - Verificar estado: `sudo systemctl status asterisk`
 - Ver logs de errores: `sudo journalctl -u asterisk`
 
-### Problemas Comunes
-1. **Error de conexión a la base de datos**: Verificar credenciales MySQL
-2. **Error en la API de Asterisk**: Verificar que Asterisk esté en ejecución
-3. **Audio no se reproduce**: Verificar permisos y formato del archivo de audio
-4. **Llamadas no se realizan**: Verificar configuración del trunk SIP
-5. **Error en la consulta SQL**: Verificar estructura de las tablas de la base de datos
+### Problemas Comunes y Soluciones
 
-## Mantenimiento
+1. **Error "Allocation failed" al iniciar llamadas**
+   - **Síntoma**: El script muestra `Error initiating call: {"error":"Allocation failed"}`
+   - **Causa**: Normalmente se debe a falta de recursos en Asterisk o problemas de conexión
+   - **Solución**: Reiniciar el servicio Asterisk para liberar recursos
+   ```bash
+   sudo systemctl restart asterisk
+   ```
 
-Se recomienda verificar periódicamente:
+2. **Error de conexión a la base de datos**
+   - **Verificación**: Comprobar credenciales MySQL y conectividad
+   ```bash
+   mysql -h $MYSQL_SERVER -u $MYSQL_USER -p$MYSQL_PASSWORD -e "SELECT 1"
+   ```
 
-1. Logs del sistema para detectar problemas de timeouts o errores
-2. Base de datos para confirmar que los registros se actualizan correctamente
-3. Calidad del audio para asegurar la comprensión del mensaje
+3. **Error en la API de Asterisk**
+   - **Verificación**: Comprobar que Asterisk esté en ejecución y que la API esté habilitada
+   ```bash
+   sudo systemctl status asterisk
+   curl -u $ASTERISK_USERNAME:$ASTERISK_PASSWORD http://localhost:8088/ari/applications
+   ```
+
+4. **Audio no se reproduce**
+   - **Verificación**: Comprobar permisos y formato del archivo de audio
+   ```bash
+   ls -la /usr/share/asterisk/sounds/es_MX/morosos_natalia.gsm
+   ```
+   - **Solución**: Convertir el audio nuevamente al formato correcto y establecer permisos adecuados
+
+5. **Llamadas no se realizan**
+   - **Verificación**: Comprobar configuración del trunk SIP
+   ```bash
+   sudo asterisk -rx "sip show peers" | grep voip_issabel
+   ```
+
+6. **Error en la consulta SQL**
+   - **Verificación**: Comprobar estructura de tablas y ejecutar consultas de prueba
+   ```bash
+   mysql -h $MYSQL_SERVER -u $MYSQL_USER -p$MYSQL_PASSWORD $MYSQL_DATABASE -e "DESCRIBE afiliados"
+   mysql -h $MYSQL_SERVER -u $MYSQL_USER -p$MYSQL_PASSWORD $MYSQL_DATABASE -e "DESCRIBE factura"
+   ```
+
+7. **El script termina abruptamente**
+   - **Verificación**: Comprobar logs para identificar timeouts o errores
+   ```bash
+   tail -n 100 /tmp/overdue_client_calls.log
+   ```
+
+## Registros y Depuración
+
+### Logs del sistema
+Los logs del script se almacenan en:
+```
+/tmp/overdue_client_calls.log
+```
+
+### Depuración Avanzada
+Para una depuración más detallada, puedes habilitar más logging en el script cambiando el nivel a DEBUG:
+
+```python
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s.%(msecs)03d - %(levelname)s - %(funcName)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler('/tmp/overdue_client_calls.log')
+    ]
+)
+```
 
 ## Estructura de la Base de Datos
 
@@ -356,3 +420,37 @@ Campos relevantes:
 - `id-afiliado`: ID del cliente (referencia a afiliados.id)
 - `saldo`: Monto pendiente de pago
 - `cerrado`: Estado de la factura (1=pagado, 0=pendiente)
+
+## Mantenimiento
+
+Se recomienda verificar periódicamente:
+
+1. Logs del sistema para detectar problemas de timeouts o errores
+2. Base de datos para confirmar que los registros se actualizan correctamente
+3. Calidad del audio para asegurar la comprensión del mensaje
+4. Estado del servicio Asterisk para prevenir problemas de recursos
+
+### Comprobaciones regulares recomendadas:
+
+```bash
+# Verificar estado del servicio Asterisk
+sudo systemctl status asterisk
+
+# Verificar conexiones SIP activas
+sudo asterisk -rx "sip show peers"
+
+# Verificar canales activos
+sudo asterisk -rx "core show channels"
+
+# Verificar aplicaciones ARI
+sudo asterisk -rx "ari show apps"
+
+# Verificar uso de recursos del sistema
+top -b -n 1 | head -n 20
+df -h
+free -m
+```
+
+## Contacto y Soporte
+
+Para problemas técnicos o consultas sobre este sistema, contactar al equipo de desarrollo responsable del mantenimiento.
