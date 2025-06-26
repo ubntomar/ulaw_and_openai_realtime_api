@@ -451,6 +451,16 @@ df -h
 free -m
 ```
 
+**Problema Identificado y Solucionado:**
+
+- **Diagnóstico correcto:** El error "Allocation failed" NO era por tu código.
+- **Causa real:** Trunk SIP en estado UNKNOWN.
+- **Solución:** Reinicio de Asterisk restauró la conectividad:
+  ```bash
+  sudo systemctl restart asterisk
+  ```
+
+
 ## Contacto y Soporte
 
 Para problemas técnicos o consultas sobre este sistema, contactar al equipo de desarrollo responsable del mantenimiento.
