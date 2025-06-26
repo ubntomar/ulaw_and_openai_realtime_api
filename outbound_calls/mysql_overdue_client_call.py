@@ -96,6 +96,10 @@ class LlamadorAutomatico:
 
     def log_call_attempt(self, status, duration=None):
         """Logs a call attempt"""
+        
+        # ================================
+        # PARTE 1: LOGGING (Sin cambios - siempre útil)
+        # ================================
         log_message = f"CALL LOG: Number={self.destination}, ID={self.call_id}, Status={status}, Attempt={self.attempt_count}"
         if duration is not None:
             log_message += f", Duration={duration}s"
@@ -111,8 +115,23 @@ class LlamadorAutomatico:
 
         logging.info(log_message)
         
-        # Update DB if this was the final attempt (successful or max retries)
-        if self.user_id and (status == CallStatus.COMPLETED or self.attempt_count >= MAX_RETRIES):
+        # ================================
+        # PARTE 2: ACTUALIZACIÓN BASE DE DATOS (Modificada)
+        # ================================
+        
+        # Solo actualizar BD en casos específicos donde no se hizo en PlaybackStarted
+        should_update_db = (
+            self.user_id and 
+            (
+                # CASO 1: Llamada fallida después de máximos intentos (sin audio exitoso)
+                (self.attempt_count >= MAX_RETRIES and not self.db_updated_on_playback) or
+                
+                # CASO 2: Llamada exitosa SOLO si no se actualizó ya en PlaybackStarted
+                (status == CallStatus.COMPLETED and not self.db_updated_on_playback)
+            )
+        )
+        
+        if should_update_db:
             try:
                 # Connect to the database
                 conn = mysql.connector.connect(
@@ -124,12 +143,11 @@ class LlamadorAutomatico:
                 
                 if conn.is_connected():
                     cursor = conn.cursor()
-                    
-                    # Update user record with call attempt information
                     current_date = datetime.now().strftime('%Y-%m-%d')
                     
-                    # For successful call
                     if status == CallStatus.COMPLETED:
+                        # CASO RARO: Llamada completada sin PlaybackStarted (no debería pasar normalmente)
+                        logging.warning("Actualizando BD desde log_call_attempt para COMPLETED - caso inusual")
                         update_query = """
                         UPDATE afiliados 
                         SET outbound_call_attempts = %s, 
@@ -138,8 +156,10 @@ class LlamadorAutomatico:
                         WHERE id = %s
                         """
                         cursor.execute(update_query, (self.attempt_count, current_date, self.user_id))
+                        
                     else:
-                        # For failed call after max retries
+                        # CASO NORMAL: Llamada fallida después de intentos máximos
+                        logging.info(f"Actualizando BD para llamada fallida - {self.attempt_count} intentos realizados")
                         update_query = """
                         UPDATE afiliados 
                         SET outbound_call_attempts = %s
@@ -148,12 +168,19 @@ class LlamadorAutomatico:
                         cursor.execute(update_query, (self.attempt_count, self.user_id))
                     
                     conn.commit()
-                    logging.info(f"Updated call status in DB for user ID {self.user_id}")
+                    logging.info(f"Updated call status in DB for user ID {self.user_id} - Status: {status}")
                     
                     cursor.close()
                     conn.close()
             except Error as e:
                 logging.error(f"Error updating database: {e}")
+        else:
+            # Log por qué no se actualiza la BD
+            if self.db_updated_on_playback:
+                logging.info(f"BD ya actualizada en PlaybackStarted para usuario {self.user_id} - Saltando actualización")
+            else:
+                logging.debug(f"No se requiere actualización BD para status={status}, attempts={self.attempt_count}")
+
 
     async def iniciar_llamada(self):
         """Initiates an outgoing call using the SIP trunk"""
@@ -395,7 +422,7 @@ class LlamadorAutomatico:
                         await self.finalizar_llamada()
                     else:
                         logging.info("Waiting for audio playback...")
-
+                
                 elif tipo == 'PlaybackStarted':
                     playback_id = evento['playback']['id']
                     if playback_id in self.playback_map:
@@ -403,8 +430,8 @@ class LlamadorAutomatico:
                         self.audio_started = True
                         self.audio_started_time = time.time()
                         
-                        # Actualizar la base de datos cuando comienza la reproducción del audio
-                        # Solo actualizar si no se ha actualizado anteriormente
+                        # ACTUALIZACIÓN COMPLETA EN EL MOMENTO DEL ÉXITO
+                        # Desde que comienza el audio, la llamada es exitosa para efectos del negocio
                         if self.user_id and not self.db_updated_on_playback:
                             try:
                                 # Conectar a la base de datos
@@ -418,25 +445,37 @@ class LlamadorAutomatico:
                                 if conn.is_connected():
                                     cursor = conn.cursor()
                                     
-                                    # Actualizar el registro del usuario para indicar que la llamada fue enviada
-                                    # No actualizamos completed_at todavía, eso se hará si la llamada termina correctamente
+                                    # Obtener la fecha actual
+                                    current_date = datetime.now().strftime('%Y-%m-%d')
+                                    
+                                    # ACTUALIZACIÓN COMPLETA: llamada exitosa desde que comienza el audio
                                     update_query = """
                                     UPDATE afiliados 
-                                    SET outbound_call_is_sent = 1
+                                    SET outbound_call_is_sent = 1,
+                                        outbound_call_attempts = %s, 
+                                        outbound_call_completed_at = %s 
                                     WHERE id = %s
                                     """
-                                    cursor.execute(update_query, (self.user_id,))
                                     
+                                    cursor.execute(update_query, (self.attempt_count, current_date, self.user_id))
                                     conn.commit()
-                                    logging.info(f"Base de datos actualizada: usuario ID {self.user_id} marcado como outbound_call_is_sent = 1")
+                                    
+                                    logging.info(f"LLAMADA EXITOSA - Usuario ID {self.user_id}: "
+                                            f"Intento {self.attempt_count}, Audio iniciado, "
+                                            f"Fecha registrada: {current_date}")
                                     
                                     # Marcar como actualizado para evitar actualizaciones duplicadas
                                     self.db_updated_on_playback = True
                                     
                                     cursor.close()
                                     conn.close()
+                                    
                             except Error as e:
                                 logging.error(f"Error actualizando la base de datos en PlaybackStarted: {e}")
+                                logging.exception("Detalles del error:")
+                            except Exception as e:
+                                logging.error(f"Error inesperado actualizando base de datos: {e}")
+                                logging.exception("Detalles del error:")
 
                 elif tipo == 'PlaybackFinished':
                     playback_id = evento['playback']['id']
