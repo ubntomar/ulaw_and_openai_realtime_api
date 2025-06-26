@@ -460,6 +460,8 @@ free -m
   sudo systemctl restart asterisk
   ```
 
+Actualmente puedes revisar los logs del sistema en `/tmp/overdue_client_calls.log` , `~/outbound_calls.log`
+
 
 ## Contacto y Soporte
 
