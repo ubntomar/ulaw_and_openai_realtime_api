@@ -615,6 +615,7 @@ class LlamadorAutomatico:
                 ping_interval=30,
                 ping_timeout=10
             ) as websocket:
+                await asyncio.sleep(5)  # Esperar 5 segundos para registro
                 if await self.iniciar_llamada():
                     await self.manejar_eventos(websocket)
 
