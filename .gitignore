@@ -3,7 +3,7 @@
 
 # Exceptuar los archivos .py
 !*.py
-
+!*.sh
 # Permitir .gitignore para no perderlo
 !.gitignore
 
