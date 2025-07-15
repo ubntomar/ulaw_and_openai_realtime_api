@@ -17,7 +17,7 @@ PASSWORD = os.getenv('ASTERISK_PASSWORD')
 AUDIO_FILE = "morosos_natalia"  # Audio file name to play
 
 # Test Configuration
-TEST_PHONE_NUMBER = "573147654655"  # Número de prueba 
+TEST_PHONE_NUMBER = "573162950915"  # Número de prueba 
 TRUNK_NAME = "voip_issabel"  # SIP trunk name
 
 # Retry configuration

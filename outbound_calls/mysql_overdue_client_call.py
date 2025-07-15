@@ -770,7 +770,21 @@ class CallManager:
             # Set the event to allow normal termination
             self.timeout_event.set()
             return
-
+        
+        
+        
+        #borrar el contenido de self.pending_calls para llenarlo manualmente con un registro de prueba
+        # self.pending_calls = []
+        # self.pending_calls.append({
+        #     "user_id": 9999,
+        #     "phone_number": "573147654655",
+        #     "attempts": 0,
+        #     "deuda_total": 100000,
+        #     "corte": 15
+        # })    
+        
+        
+        
         # Process each call with its own independent timeout
         for call_data in self.pending_calls:
             user_id = call_data.get("user_id")
