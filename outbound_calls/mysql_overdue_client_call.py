@@ -777,7 +777,7 @@ class CallManager:
         # self.pending_calls = []
         # self.pending_calls.append({
         #     "user_id": 9999,
-        #     "phone_number": "573147654655",
+        #     "phone_number": "573162950915",
         #     "attempts": 0,
         #     "deuda_total": 100000,
         #     "corte": 15
