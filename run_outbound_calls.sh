@@ -128,7 +128,7 @@ main() {
         fi
         
         # Verificar que el script Python existe
-        file_path="/usr/local/bin/outbound_calls/mysql_overdue_client_call.py"
+        file_path="/usr/local/bin/outbound_calls/llamada_clientes_moroso.py"
         file2_path="/usr/local/bin/outbound_calls/test_single_call.py"
         active_path=$file_path
         if [ -f "$active_path" ]; then
