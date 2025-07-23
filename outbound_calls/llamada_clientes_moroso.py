@@ -18,6 +18,17 @@ from datetime import datetime, timedelta
 # Cambiar a False para mostrar solo logs de progreso limpios
 DEBUG_MODE = True  # <-- CAMBIAR AQUÍ PARA ACTIVAR/DESACTIVAR DEBUG
 
+# ============================================================================
+# MODO GLOBAL DE TIMEOUT - MEJORADO
+# ============================================================================
+# Activar para evitar gastos excesivos. Cambiar a False solo para testing
+GLOBAL_TIMEOUT_ENABLED = False  # <-- CAMBIAR AQUÍ PARA ACTIVAR/DESACTIVAR TIMEOUT GLOBAL
+
+if not GLOBAL_TIMEOUT_ENABLED:
+    progress_log("✅ TIMEOUT GLOBAL DESHABILITADO - Script procesará todos los clientes")
+else:
+    progress_log("⚠️ TIMEOUT GLOBAL HABILITADO - Script se detendrá automáticamente")
+
 # Configuration
 ARI_URL = "http://localhost:8088/ari"
 WEBSOCKET_URL = "ws://localhost:8088/ari/events"
@@ -31,7 +42,7 @@ MYSQL_PASSWORD = os.getenv('MYSQL_PASSWORD')
 MYSQL_SERVER = os.getenv('MYSQL_SERVER')
 MYSQL_USER = os.getenv('MYSQL_USER')
 
-# Retry configuration
+# Retry configuration - MEJORADO
 MAX_RETRIES = 3  # Maximum number of attempts for a failed call
 RETRY_DELAY = 120  # Time in seconds between retries (2 minutes)
 CALL_TIMEOUT = 90  # Maximum time in seconds to wait for a call to be answered
@@ -39,6 +50,13 @@ AUDIO_START_TIMEOUT = 15  # Maximum time in seconds to wait for audio to start p
 MAX_SILENT_CALL_DURATION = 20  # Maximum time in seconds to keep a call without audio
 BASE_SCRIPT_TIMEOUT = 3000  # Base timeout in seconds (50 minutes)
 ADDITIONAL_TIME_PER_USER = 300  # Additional time per user in seconds (5 minutes)
+
+# NUEVA CONFIGURACIÓN DE TIMEOUTS PARA ESTABILIDAD
+EVENT_TIMEOUT = 10  # Timeout para eventos individuales de WebSocket
+MAX_IDLE_TIME = 30  # Tiempo máximo sin eventos antes de finalizar
+CLIENT_PROCESSING_TIMEOUT = 600  # Timeout máximo por cliente (10 minutos)
+INTER_CLIENT_DELAY = 10  # Pausa entre clientes (aumentada para estabilidad)
+HANGUP_TIMEOUT = 5  # Timeout para operaciones de hangup
 
 if not USERNAME or not PASSWORD:
     logging.error("Environment variables ASTERISK_USERNAME and ASTERISK_PASSWORD must be set")
@@ -86,6 +104,10 @@ def progress_log(message, *args, **kwargs):
 # Inicializar logging
 setup_logging()
 
+# Mostrar estado del timeout global
+if not GLOBAL_TIMEOUT_ENABLED:
+    progress_log("✅ TIMEOUT GLOBAL DESHABILITADO - Script procesará todos los clientes")
+
 class CallStatus:
     INITIATED = "INITIATED"
     RINGING = "RINGING"
@@ -125,6 +147,9 @@ class LlamadorAutomatico:
             'duration': None,
             'audio_played': False
         }
+        
+        # Extraer nombre del cliente si está disponible
+        self.cliente = self.client_info.get('cliente', 'Desconocido')
 
     async def setup_session(self):
         if self.session is None:
@@ -139,21 +164,23 @@ class LlamadorAutomatico:
             await self.session.close()
             self.session = None
             
-        # CANCELAR TODOS LOS TIMEOUTS PENDIENTES
+        # CORRECCIÓN 8: CANCELACIÓN ROBUSTA DE TODOS LOS TIMEOUTS PENDIENTES
         timeout_tasks = [self.timeout_task, self.audio_timeout_task, self.silent_call_timeout_task]
+        cancelled_count = 0
+        
         for task in timeout_tasks:
             if task and not task.done():
                 task.cancel()
                 try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
+                    await asyncio.wait_for(task, timeout=1.0)  # Timeout para cancelación
+                except (asyncio.CancelledError, asyncio.TimeoutError):
+                    cancelled_count += 1
         
         self.timeout_task = None
         self.audio_timeout_task = None
         self.silent_call_timeout_task = None
         
-        debug_log("Todos los timeouts internos cancelados en cleanup_session")
+        debug_log(f"Todos los timeouts individuales cancelados en cleanup_session ({cancelled_count} cancelados)")
 
     def _get_client_progress_info(self):
         """Helper para obtener información de progreso del cliente"""
@@ -472,202 +499,235 @@ class LlamadorAutomatico:
             debug_log(f"Error en check_call_completion: {e}")
 
     async def manejar_eventos(self, websocket):
-        """Processes WebSocket events"""
+        """Processes WebSocket events - VERSIÓN CORREGIDA CON TIMEOUTS"""
+        last_event_time = time.time()
+        
         try:
-            async for mensaje in websocket:
-                evento = json.loads(mensaje)
-                tipo = evento.get('type')
-                debug_log(f"Evento recibido: {tipo}")
+            debug_log(f"Llamada iniciada, entrando en bucle de eventos para cliente {self._get_client_progress_info()[0]}")
+            
+            while True:
+                try:
+                    # CORRECCIÓN 1: Agregar timeout a la espera de eventos
+                    mensaje = await asyncio.wait_for(
+                        websocket.recv(), 
+                        timeout=EVENT_TIMEOUT
+                    )
+                    
+                    evento = json.loads(mensaje)
+                    tipo = evento.get('type')
+                    last_event_time = time.time()  # Actualizar tiempo del último evento
+                    
+                    debug_log(f"Evento recibido: {tipo}")
 
-                if tipo == 'Dial':
-                    dial_state = evento.get('dialstatus')
-                    if dial_state == 'RINGING':
-                        self.call_status = CallStatus.RINGING
-                        debug_log("Llamada está sonando")
+                    if tipo == 'Dial':
+                        dial_state = evento.get('dialstatus')
+                        if dial_state == 'RINGING':
+                            self.call_status = CallStatus.RINGING
+                            debug_log("Llamada está sonando")
 
-                elif tipo == 'StasisStart':
-                    self.active_channel = evento['channel']['id']
-                    self.call_status = CallStatus.ANSWERED
-                    current_num, total_num = self._get_client_progress_info()
-                    progress_log(f"📞 CONTESTADA - Cliente {current_num}/{total_num} - Canal: {self.active_channel}")
-
-                    # Cancel the timeout if it exists
-                    if self.timeout_task:
-                        self.timeout_task.cancel()
-                        self.timeout_task = None
-
-                    # Query active playbacks for debugging
-                    if DEBUG_MODE:
-                        try:
-                            url = f"{ARI_URL}/playbacks"
-                            async with self.session.get(url) as response:
-                                if response.status == 200:
-                                    playbacks = await response.json()
-                                    debug_log(f"Playbacks activos: {len(playbacks)}")
-                                    for pb in playbacks:
-                                        debug_log(f"  - ID: {pb.get('id')}, Canal: {pb.get('target_uri')}, Estado: {pb.get('state')}")
-                        except Exception as e:
-                            debug_log(f"Error consultando playbacks: {e}")
-
-                    await asyncio.sleep(1)
-                    await self.reproducir_audio()
-
-                    if not self.audio_started and not self.audio_requested_time:
-                        logging.error("❌ No se pudo solicitar reproducción de audio")
-                        self.call_status = CallStatus.AUDIO_FAILED
-                        await self.finalizar_llamada()
-                
-                elif tipo == 'PlaybackStarted':
-                    playback_id = evento['playback']['id']
-                    if playback_id in self.playback_map:
-                        current_num, total_num = self._get_client_progress_info()
-                        progress_log(f"🎵 AUDIO INICIADO - Cliente {current_num}/{total_num} - ID: {playback_id}")
-                        self.audio_started = True
-                        self.audio_started_time = time.time()
-                        
-                        # ACTUALIZACIÓN EXITOSA EN BD
-                        if self.user_id and not self.db_updated_on_playback:
-                            try:
-                                conn = mysql.connector.connect(
-                                    host=MYSQL_SERVER,
-                                    database=MYSQL_DATABASE,
-                                    user=MYSQL_USER,
-                                    password=MYSQL_PASSWORD
-                                )
-                                
-                                if conn.is_connected():
-                                    cursor = conn.cursor()
-                                    current_date = datetime.now().strftime('%Y-%m-%d')
-                                    
-                                    update_query = """
-                                    UPDATE afiliados 
-                                    SET outbound_call_is_sent = 1,
-                                        outbound_call_attempts = %s, 
-                                        outbound_call_completed_at = %s 
-                                    WHERE id = %s
-                                    """
-                                    
-                                    cursor.execute(update_query, (self.attempt_count, current_date, self.user_id))
-                                    conn.commit()
-                                    
-                                    progress_log(f"✅ LLAMADA EXITOSA - Cliente {current_num}/{total_num} registrada en BD")
-                                    debug_log(f"BD actualizada: intento {self.attempt_count}, fecha {current_date}")
-                                    
-                                    self.db_updated_on_playback = True
-                                    
-                                    cursor.close()
-                                    conn.close()
-                                    
-                            except Error as e:
-                                logging.error(f"❌ Error actualizando BD en PlaybackStarted: {e}")
-
-                elif tipo == 'PlaybackFinished':
-                    playback_id = evento['playback']['id']
-                    if playback_id in self.playback_map:
-                        current_num, total_num = self._get_client_progress_info()
-                        
-                        if self.audio_started_time:
-                            audio_duration = time.time() - self.audio_started_time
-                            progress_log(f"🎵 AUDIO COMPLETADO - Cliente {current_num}/{total_num} - Duración: {audio_duration:.2f}s")
-
-                        await asyncio.sleep(2)
-                        await self.finalizar_llamada(status=CallStatus.COMPLETED)
-
-                elif tipo == 'StasisEnd':
-                    if evento.get('channel', {}).get('id') == self.active_channel:
-                        debug_log("Llamada terminada por el destino")
-                        self.active_channel = None
-                        if self.call_status == CallStatus.ANSWERED:
-                            self.call_status = CallStatus.COMPLETED
-
-                elif tipo == 'ChannelStateChange':
-                    state = evento.get('channel', {}).get('state')
-                    debug_log(f"Estado del canal cambió a: {state}")
-                    if state == 'Up' and self.call_status != CallStatus.ANSWERED:
+                    elif tipo == 'StasisStart':
+                        self.active_channel = evento['channel']['id']
                         self.call_status = CallStatus.ANSWERED
+                        current_num, total_num = self._get_client_progress_info()
+                        progress_log(f"📞 CONTESTADA - Cliente {current_num}/{total_num} - Canal: {self.active_channel}")
 
-                elif tipo == 'ChannelDestroyed':
-                    channel_id = evento.get('channel', {}).get('id')
-                    if channel_id == self.call_id:
-                        debug_log(f"Canal destruido: {channel_id}")
+                        # Cancel the timeout if it exists
+                        if self.timeout_task:
+                            self.timeout_task.cancel()
+                            self.timeout_task = None
 
-                        call_duration = None
-                        if self.call_start_time:
-                            call_duration = round(time.time() - self.call_start_time)
+                        await asyncio.sleep(1)
+                        await self.reproducir_audio()
 
-                        if self.call_status not in [CallStatus.COMPLETED]:
-                            if self.call_status == CallStatus.ANSWERED and not self.audio_started:
-                                self.call_status = CallStatus.AUDIO_FAILED
-                            elif self.call_status not in [CallStatus.AUDIO_FAILED]:
-                                self.call_status = CallStatus.FAILED
+                        if not self.audio_started and not self.audio_requested_time:
+                            logging.error("❌ No se pudo solicitar reproducción de audio")
+                            self.call_status = CallStatus.AUDIO_FAILED
+                            await self.finalizar_llamada()
+                    
+                    elif tipo == 'PlaybackStarted':
+                        playback_id = evento['playback']['id']
+                        if playback_id in self.playback_map:
+                            current_num, total_num = self._get_client_progress_info()
+                            progress_log(f"🎵 AUDIO INICIADO - Cliente {current_num}/{total_num} - ID: {playback_id}")
+                            self.audio_started = True
+                            self.audio_started_time = time.time()
+                            
+                            # ACTUALIZACIÓN EXITOSA EN BD
+                            if self.user_id and not self.db_updated_on_playback:
+                                try:
+                                    conn = mysql.connector.connect(
+                                        host=MYSQL_SERVER,
+                                        database=MYSQL_DATABASE,
+                                        user=MYSQL_USER,
+                                        password=MYSQL_PASSWORD
+                                    )
+                                    
+                                    if conn.is_connected():
+                                        cursor = conn.cursor()
+                                        current_date = datetime.now().strftime('%Y-%m-%d')
+                                        
+                                        update_query = """
+                                        UPDATE afiliados 
+                                        SET outbound_call_is_sent = 1,
+                                            outbound_call_attempts = %s, 
+                                            outbound_call_completed_at = %s 
+                                        WHERE id = %s
+                                        """
+                                        
+                                        cursor.execute(update_query, (self.attempt_count, current_date, self.user_id))
+                                        conn.commit()
+                                        
+                                        progress_log(f"✅ LLAMADA EXITOSA - Cliente {current_num}/{total_num} registrada en BD")
+                                        debug_log(f"BD actualizada: intento {self.attempt_count}, fecha {current_date}")
+                                        
+                                        self.db_updated_on_playback = True
+                                        
+                                        cursor.close()
+                                        conn.close()
+                                        
+                                except Error as e:
+                                    logging.error(f"❌ Error actualizando BD en PlaybackStarted: {e}")
 
-                            self.log_call_attempt(self.call_status, call_duration)
+                    elif tipo == 'PlaybackFinished':
+                        playback_id = evento['playback']['id']
+                        if playback_id in self.playback_map:
+                            current_num, total_num = self._get_client_progress_info()
+                            
+                            if self.audio_started_time:
+                                audio_duration = time.time() - self.audio_started_time
+                                progress_log(f"🎵 AUDIO COMPLETADO - Cliente {current_num}/{total_num} - Duración: {audio_duration:.2f}s")
 
-                            # Lógica de reintentos
-                            if self.attempt_count < MAX_RETRIES:
-                                current_num, total_num = self._get_client_progress_info()
-                                retry_reason = "fallo de audio" if self.call_status == CallStatus.AUDIO_FAILED else "llamada fallida"
-                                
-                                progress_log(f"🔄 Cliente {current_num}/{total_num} - Reintento #{self.attempt_count + 1} en {RETRY_DELAY}s por {retry_reason}")
-                                debug_log(f"Esperando {RETRY_DELAY} segundos antes del siguiente intento")
-                                
-                                await asyncio.sleep(RETRY_DELAY)
-                                
-                                # Reset states for the new attempt
-                                self.active_channel = None
-                                self.call_id = None
-                                self.audio_started = False
-                                self.audio_requested_time = None
-                                self.audio_started_time = None
-                                
-                                if await self.iniciar_llamada():
-                                    continue
+                            # CORRECCIÓN 2: Finalizar inmediatamente después de audio completado
+                            await asyncio.sleep(2)
+                            await self.finalizar_llamada(status=CallStatus.COMPLETED)
+                            
+                            # CORRECCIÓN 3: Romper el bucle inmediatamente
+                            debug_log(f"Llamada completada exitosamente para cliente {current_num}")
+                            return  # Usar return para salir completamente del método
+
+                    elif tipo == 'StasisEnd':
+                        if evento.get('channel', {}).get('id') == self.active_channel:
+                            debug_log("Llamada terminada por el destino")
+                            self.active_channel = None
+                            if self.call_status == CallStatus.ANSWERED:
+                                self.call_status = CallStatus.COMPLETED
+
+                    elif tipo == 'ChannelStateChange':
+                        state = evento.get('channel', {}).get('state')
+                        debug_log(f"Estado del canal cambió a: {state}")
+                        if state == 'Up' and self.call_status != CallStatus.ANSWERED:
+                            self.call_status = CallStatus.ANSWERED
+
+                    elif tipo == 'ChannelDestroyed':
+                        channel_id = evento.get('channel', {}).get('id')
+                        if channel_id == self.call_id:
+                            debug_log(f"Canal destruido: {channel_id}")
+
+                            call_duration = None
+                            if self.call_start_time:
+                                call_duration = round(time.time() - self.call_start_time)
+
+                            if self.call_status not in [CallStatus.COMPLETED]:
+                                if self.call_status == CallStatus.ANSWERED and not self.audio_started:
+                                    self.call_status = CallStatus.AUDIO_FAILED
+                                elif self.call_status not in [CallStatus.AUDIO_FAILED]:
+                                    self.call_status = CallStatus.FAILED
+
+                                self.log_call_attempt(self.call_status, call_duration)
+
+                                # Lógica de reintentos
+                                if self.attempt_count < MAX_RETRIES:
+                                    current_num, total_num = self._get_client_progress_info()
+                                    retry_reason = "fallo de audio" if self.call_status == CallStatus.AUDIO_FAILED else "llamada fallida"
+                                    
+                                    progress_log(f"🔄 Cliente {current_num}/{total_num} - Reintento #{self.attempt_count + 1} en {RETRY_DELAY}s por {retry_reason}")
+                                    debug_log(f"Esperando {RETRY_DELAY} segundos antes del siguiente intento")
+                                    
+                                    await asyncio.sleep(RETRY_DELAY)
+                                    
+                                    # Reset states for the new attempt
+                                    self.active_channel = None
+                                    self.call_id = None
+                                    self.audio_started = False
+                                    self.audio_requested_time = None
+                                    self.audio_started_time = None
+                                    
+                                    if await self.iniciar_llamada():
+                                        continue
+                                    else:
+                                        break
                                 else:
+                                    current_num, total_num = self._get_client_progress_info()
+                                    progress_log(f"❌ Cliente {current_num}/{total_num} - MÁXIMO DE INTENTOS ALCANZADO ({MAX_RETRIES})")
+                                    
+                                    if current_num < total_num:
+                                        progress_log(f"🔄 CONTINUANDO CON SIGUIENTE CLIENTE ({current_num + 1}/{total_num})")
+                                    
                                     break
                             else:
+                                # CORRECCIÓN 5: Manejo explícito de llamada exitosa
                                 current_num, total_num = self._get_client_progress_info()
-                                progress_log(f"❌ Cliente {current_num}/{total_num} - MÁXIMO DE INTENTOS ALCANZADO ({MAX_RETRIES})")
+                                if self.call_status == CallStatus.ANSWERED and call_duration:
+                                    self.log_call_attempt(CallStatus.COMPLETED, call_duration)
+                                
+                                progress_log(f"✅ Cliente {current_num}/{total_num} - LLAMADA COMPLETADA EXITOSAMENTE")
                                 
                                 if current_num < total_num:
                                     progress_log(f"🔄 CONTINUANDO CON SIGUIENTE CLIENTE ({current_num + 1}/{total_num})")
                                 
-                                break
-                        else:
-                            # LLAMADA EXITOSA - REGISTRAR Y TERMINAR CORRECTAMENTE
-                            current_num, total_num = self._get_client_progress_info()
-                            if self.call_status == CallStatus.ANSWERED and call_duration:
-                                self.log_call_attempt(CallStatus.COMPLETED, call_duration)
-                            
-                            progress_log(f"✅ Cliente {current_num}/{total_num} - LLAMADA COMPLETADA EXITOSAMENTE")
-                            
-                            if current_num < total_num:
-                                progress_log(f"🔄 CONTINUANDO CON SIGUIENTE CLIENTE ({current_num + 1}/{total_num})")
-                            
-                            debug_log(f"Terminando bucle de eventos para cliente exitoso {current_num}/{total_num}")
+                                debug_log(f"Terminando bucle de eventos para cliente exitoso {current_num}/{total_num}")
+                                # CORRECCIÓN 6: Usar return para salir completamente
+                                return
+
+                except asyncio.TimeoutError:
+                    # CORRECCIÓN 7: Manejar timeout de eventos
+                    current_time = time.time()
+                    time_since_last_event = current_time - last_event_time
+                    
+                    debug_log(f"Timeout esperando evento - Tiempo desde último evento: {time_since_last_event:.1f}s")
+                    
+                    # Si hemos estado idle demasiado tiempo, verificar si la llamada debe terminar
+                    if time_since_last_event > MAX_IDLE_TIME:
+                        if self.call_status == CallStatus.COMPLETED:
+                            debug_log("Llamada completada - terminando bucle por inactividad")
                             break
+                        elif self.call_status == CallStatus.ANSWERED and self.audio_started:
+                            debug_log("Audio completado pero sin eventos - forzando finalización")
+                            await self.finalizar_llamada(status=CallStatus.COMPLETED)
+                            break
+                    
+                    continue
+
+                except websockets.ConnectionClosed:
+                    debug_log("Conexión WebSocket cerrada durante el manejo de eventos")
+                    break
 
         except Exception as e:
             logging.error(f"❌ Error en manejar_eventos: {e}")
             await self.finalizar_llamada()
+        finally:
+            debug_log(f"Bucle de eventos terminado para cliente {self._get_client_progress_info()[0]}")
 
     async def finalizar_llamada(self, status=None):
-        """Ends the active call"""
+        """Ends the active call - VERSIÓN MEJORADA CON TIMEOUTS"""
         try:
-            # CANCELACIÓN ROBUSTA DE TODOS LOS TIMEOUTS
+            # CORRECCIÓN 4: CANCELACIÓN ROBUSTA DE TODOS LOS TIMEOUTS
             timeout_tasks = [self.timeout_task, self.audio_timeout_task, self.silent_call_timeout_task]
+            cancelled_count = 0
+            
             for task in timeout_tasks:
                 if task and not task.done():
                     task.cancel()
                     try:
-                        await task
-                    except asyncio.CancelledError:
-                        pass
+                        await asyncio.wait_for(task, timeout=1.0)  # Timeout para cancelación
+                    except (asyncio.CancelledError, asyncio.TimeoutError):
+                        cancelled_count += 1
 
             self.timeout_task = None
             self.audio_timeout_task = None
             self.silent_call_timeout_task = None
             
-            debug_log("Todos los timeouts cancelados en finalizar_llamada")
+            debug_log(f"Todos los timeouts individuales cancelados en finalizar_llamada")
 
             if status:
                 self.call_status = status
@@ -680,26 +740,36 @@ class LlamadorAutomatico:
             debug_log(f"Canal activo: {self.active_channel}")
             
             if self.active_channel:
-                url = f"{ARI_URL}/channels/{self.active_channel}"
-                async with self.session.delete(url) as response:
-                    if response.ok:
-                        debug_log(f"Llamada terminada exitosamente (duración: {call_duration}s)")
-                        if self.call_status == CallStatus.ANSWERED and not status:
-                            self.log_call_attempt(CallStatus.COMPLETED, call_duration)
-                    else:
-                        response_text = await response.text()
-                        if "Channel not found" in response_text:
-                            debug_log("Canal ya no existe, probablemente ya terminó")
+                try:
+                    url = f"{ARI_URL}/channels/{self.active_channel}"
+                    # CORRECCIÓN 8: Agregar timeout para operación de hangup
+                    async with asyncio.wait_for(
+                        self.session.delete(url), 
+                        timeout=HANGUP_TIMEOUT
+                    ) as response:
+                        if response.ok:
+                            debug_log(f"Llamada terminada exitosamente (duración: {call_duration}s)")
+                            if self.call_status == CallStatus.ANSWERED and not status:
+                                self.log_call_attempt(CallStatus.COMPLETED, call_duration)
                         else:
-                            debug_log(f"Error terminando llamada: {response_text}")
+                            response_text = await response.text()
+                            if "Channel not found" in response_text:
+                                debug_log("Canal ya no existe, probablemente ya terminó")
+                            else:
+                                debug_log(f"Error terminando llamada: {response_text}")
 
-                        if not status:
-                            self.log_call_attempt(self.call_status or CallStatus.FAILED, call_duration)
+                            if not status:
+                                self.log_call_attempt(self.call_status or CallStatus.FAILED, call_duration)
+                except asyncio.TimeoutError:
+                    debug_log("Timeout al intentar colgar - continuando con limpieza")
+                except Exception as e:
+                    debug_log(f"Error al colgar llamada: {e}")
             
             debug_log("Llamada terminada")
         except Exception as e:
             logging.error(f"❌ Error terminando llamada: {e}")
         finally:
+            # LIMPIEZA FORZADA DE ESTADO
             self.active_channel = None
             self.call_id = None
             self.audio_started = False
@@ -707,7 +777,7 @@ class LlamadorAutomatico:
             self.audio_started_time = None
 
     async def ejecutar(self):
-        """Main execution flow"""
+        """Main execution flow - VERSIÓN MEJORADA"""
         current_num, total_num = self._get_client_progress_info()
         debug_log(f"=== INICIANDO EJECUCIÓN PARA CLIENTE {current_num}/{total_num} ===")
         
@@ -724,7 +794,6 @@ class LlamadorAutomatico:
                 await asyncio.sleep(5)
                 
                 if await self.iniciar_llamada():
-                    debug_log(f"Llamada iniciada, entrando en bucle de eventos para cliente {current_num}")
                     await self.manejar_eventos(websocket)
                     debug_log(f"Bucle de eventos terminado para cliente {current_num}")
                 else:
@@ -810,6 +879,8 @@ class CallManager:
             LEFT JOIN factura f ON a.id = f.`id-afiliado`
             WHERE a.outbound_call = 1 
             AND a.outbound_call_is_sent = 0
+            AND a.activo = 1
+            AND a.eliminar = 0
             GROUP BY a.id, a.telefono, a.outbound_call_attempts, a.corte
             HAVING deuda_total > 0
             ORDER BY a.id
@@ -842,7 +913,7 @@ class CallManager:
                     is_valid_call_day = (current_day == corte_day - 1) or (current_day >= corte_day)
                     
                     if not is_valid_call_day:
-                        debug_log(f"Cliente {user_id} nombre={cliente} excluido  - día actual ({current_day}) está a más de un día del corte ({corte_day})")
+                        debug_log(f"Cliente {user_id} nombre={cliente} excluido - día actual ({current_day}) está a más de un día del corte ({corte_day})")
                         excluded_count += 1
                         continue
                 
@@ -926,11 +997,12 @@ class CallManager:
         """Updates the timeout duration and extends the existing timeout task"""
         self.timeout_seconds += additional_seconds
         
-        if self.timeout_task and not self.timeout_task.done():
+        if GLOBAL_TIMEOUT_ENABLED and self.timeout_task and not self.timeout_task.done():
             self.timeout_task.cancel()
             debug_log(f"Timeout extendido a {self.timeout_seconds} segundos")
         
-        self.timeout_task = asyncio.create_task(self.terminar_por_timeout())
+        if GLOBAL_TIMEOUT_ENABLED:
+            self.timeout_task = asyncio.create_task(self.terminar_por_timeout())
 
     async def terminar_por_timeout(self):
         """Ends the script after a timeout period"""
@@ -943,18 +1015,24 @@ class CallManager:
             os._exit(0)
 
     async def process_pending_calls(self):
-        """Processes all pending calls with enhanced progress logging"""
+        """Processes all pending calls with enhanced progress logging - VERSIÓN MEJORADA"""
         if not self.load_pending_calls():
             progress_log("⚠️ No hay llamadas pendientes para procesar")
-            self.timeout_event.set()
+            if GLOBAL_TIMEOUT_ENABLED:
+                self.timeout_event.set()
             return
         
         # Establecer totales y mostrar resumen inicial
         self.total_clients = len(self.pending_calls)
+        
+        # Mostrar estado del timeout global
+        timeout_status = "DESHABILITADO" if not GLOBAL_TIMEOUT_ENABLED else f"HABILITADO ({self.timeout_seconds}s)"
+        
         progress_log("\n" + "=" * 80)
         progress_log("🚀 INICIANDO PROCESAMIENTO DE LLAMADAS AUTOMÁTICAS")
         progress_log(f"📊 TOTAL DE CLIENTES A PROCESAR: {self.total_clients}")
         progress_log(f"⏰ Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        progress_log(f"🔥 TIMEOUT GLOBAL {timeout_status} - {'Script procesará TODOS los clientes' if not GLOBAL_TIMEOUT_ENABLED else 'Script tiene límite de tiempo'}")
         progress_log("=" * 80)
         
         # Procesar cada llamada con contador de progreso
@@ -979,21 +1057,22 @@ class CallManager:
             progress_log("=" * 60)
             
             # CANCELACIÓN ROBUSTA DE TIMEOUTS ANTERIORES
-            if self.timeout_task and not self.timeout_task.done():
+            if GLOBAL_TIMEOUT_ENABLED and self.timeout_task and not self.timeout_task.done():
                 self.timeout_task.cancel()
                 try:
-                    await self.timeout_task
-                except asyncio.CancelledError:
+                    await asyncio.wait_for(self.timeout_task, timeout=1.0)
+                except (asyncio.CancelledError, asyncio.TimeoutError):
                     pass
                 debug_log(f"Timeout anterior cancelado completamente para cliente {self.current_client_number}")
             
             # Reset timeout configurations per user
-            self.timeout_event = asyncio.Event()
-            self.timeout_seconds = BASE_SCRIPT_TIMEOUT
-            debug_log(f"Timeout fresco de {self.timeout_seconds}s para cliente {user_id}")
-            
-            # Crear nuevo timeout task
-            self.timeout_task = asyncio.create_task(self.terminar_por_timeout())
+            if GLOBAL_TIMEOUT_ENABLED:
+                self.timeout_event = asyncio.Event()
+                self.timeout_seconds = BASE_SCRIPT_TIMEOUT
+                debug_log(f"Timeout fresco de {self.timeout_seconds}s para cliente {user_id}")
+                
+                # Crear nuevo timeout task
+                self.timeout_task = asyncio.create_task(self.terminar_por_timeout())
             
             # Procesar llamada con información del cliente
             try:
@@ -1003,6 +1082,7 @@ class CallManager:
                     client_info={
                         'current_number': self.current_client_number,
                         'total_clients': self.total_clients,
+                        'cliente': cliente,
                         'deuda_total': deuda_total,
                         'corte': corte
                     }
@@ -1010,17 +1090,32 @@ class CallManager:
                 
                 debug_log(f"Iniciando procesamiento del cliente {self.current_client_number}/{self.total_clients}")
                 
-                # Obtener resultado de la llamada
-                call_result = await llamador.ejecutar()
+                # CORRECCIÓN 9: Agregar timeout a la ejecución individual de cada cliente
+                try:
+                    call_result = await asyncio.wait_for(
+                        llamador.ejecutar(), 
+                        timeout=CLIENT_PROCESSING_TIMEOUT
+                    )
+                except asyncio.TimeoutError:
+                    logging.error(f"❌ Timeout procesando cliente {self.current_client_number} después de {CLIENT_PROCESSING_TIMEOUT}s")
+                    call_result = {
+                        'user_id': user_id,
+                        'phone': phone_number,
+                        'status': 'FAILED',
+                        'attempts': 0,
+                        'failure_reason': 'CLIENT_PROCESSING_TIMEOUT',
+                        'duration': None,
+                        'audio_played': False
+                    }
                 
                 debug_log(f"Cliente {self.current_client_number} procesado. Resultado: {call_result}")
                 
                 # CANCELAR TIMEOUT INMEDIATAMENTE DESPUÉS DEL PROCESAMIENTO
-                if self.timeout_task and not self.timeout_task.done():
+                if GLOBAL_TIMEOUT_ENABLED and self.timeout_task and not self.timeout_task.done():
                     self.timeout_task.cancel()
                     try:
-                        await self.timeout_task
-                    except asyncio.CancelledError:
+                        await asyncio.wait_for(self.timeout_task, timeout=1.0)
+                    except (asyncio.CancelledError, asyncio.TimeoutError):
                         pass
                     debug_log(f"Timeout del cliente {self.current_client_number} cancelado después del procesamiento")
                 
@@ -1034,11 +1129,11 @@ class CallManager:
                     self.failed_calls += 1
                     progress_log(f"❌ Cliente {self.current_client_number}/{self.total_clients} - NO CONTACTADO")
                 
-                # Pausa entre llamadas
+                # CORRECCIÓN 10: Pausa obligatoria aumentada entre clientes para estabilidad
                 if self.current_client_number < self.total_clients:
-                    progress_log(f"⏳ Esperando 5 segundos antes del siguiente cliente...")
-                    debug_log("Pausa de 5 segundos antes del siguiente cliente")
-                    await asyncio.sleep(5)
+                    progress_log(f"⏳ Esperando {INTER_CLIENT_DELAY} segundos antes del siguiente cliente...")
+                    debug_log(f"Pausa de {INTER_CLIENT_DELAY} segundos antes del siguiente cliente")
+                    await asyncio.sleep(INTER_CLIENT_DELAY)
                 
                 debug_log(f"=== CLIENTE {self.current_client_number}/{self.total_clients} COMPLETADO ===")
                     
@@ -1047,11 +1142,11 @@ class CallManager:
                 debug_log(f"Error detallado procesando cliente {user_id}: {e}", exc_info=True)
                 
                 # CANCELAR TIMEOUT EN CASO DE ERROR TAMBIÉN
-                if self.timeout_task and not self.timeout_task.done():
+                if GLOBAL_TIMEOUT_ENABLED and self.timeout_task and not self.timeout_task.done():
                     self.timeout_task.cancel()
                     try:
-                        await self.timeout_task
-                    except asyncio.CancelledError:
+                        await asyncio.wait_for(self.timeout_task, timeout=1.0)
+                    except (asyncio.CancelledError, asyncio.TimeoutError):
                         pass
                     debug_log(f"Timeout cancelado después de error en cliente {self.current_client_number}")
                 
@@ -1070,20 +1165,20 @@ class CallManager:
                 
                 progress_log(f"❌ Cliente {self.current_client_number}/{self.total_clients} - ERROR EN PROCESAMIENTO")
                 
-                # Continúar con el siguiente cliente después de un error
+                # Continuar con el siguiente cliente después de un error
                 if self.current_client_number < self.total_clients:
                     progress_log(f"🔄 CONTINUANDO CON SIGUIENTE CLIENTE ({self.current_client_number + 1}/{self.total_clients})")
-                    await asyncio.sleep(5)
+                    await asyncio.sleep(INTER_CLIENT_DELAY)
                 
                 debug_log(f"=== CLIENTE {self.current_client_number}/{self.total_clients} COMPLETADO CON ERROR ===")
 
         # CANCELACIÓN FINAL DE TIMEOUT
-        if self.timeout_task and not self.timeout_task.done():
+        if GLOBAL_TIMEOUT_ENABLED and self.timeout_task and not self.timeout_task.done():
             self.timeout_event.set()
             self.timeout_task.cancel()
             try:
-                await self.timeout_task
-            except asyncio.CancelledError:
+                await asyncio.wait_for(self.timeout_task, timeout=1.0)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
                 pass
             debug_log("Timeout final cancelado completamente")
         
@@ -1094,6 +1189,9 @@ async def main():
     try:
         progress_log("🚀 Iniciando sistema de llamadas automáticas")
         progress_log(f"🔧 Modo DEBUG: {'ACTIVADO' if DEBUG_MODE else 'DESACTIVADO'}")
+        
+        if not GLOBAL_TIMEOUT_ENABLED:
+            progress_log("🔥 TIMEOUT GLOBAL DESHABILITADO - Procesará todos los clientes")
         
         call_manager = CallManager()
         await call_manager.process_pending_calls()
