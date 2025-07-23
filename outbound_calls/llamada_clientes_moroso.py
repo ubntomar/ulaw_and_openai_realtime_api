@@ -905,7 +905,7 @@ class CallManager:
                 corte = row['corte']
                 deuda_total = row['deuda_total']
                 
-                debug_log(f"Evaluando cliente {user_id}: teléfono={phone}, corte={corte}, deuda={deuda_total} nombre={cliente}")
+                debug_log(f"Evaluando {cliente} {user_id}: teléfono={phone}, corte={corte}, deuda={deuda_total} ")
                 
                 # Verificar el día de corte
                 if corte and corte.isdigit():
@@ -913,7 +913,7 @@ class CallManager:
                     is_valid_call_day = (current_day == corte_day - 1) or (current_day >= corte_day)
                     
                     if not is_valid_call_day:
-                        debug_log(f"Cliente {user_id} nombre={cliente} excluido - día actual ({current_day}) está a más de un día del corte ({corte_day})")
+                        debug_log(f"Cliente {user_id} nombre={cliente} EXCLUIDO - día actual ({current_day}) está a más de un día del corte ({corte_day})")
                         excluded_count += 1
                         continue
                 
