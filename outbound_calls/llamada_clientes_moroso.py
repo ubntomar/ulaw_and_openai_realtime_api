@@ -574,6 +574,15 @@ class LlamadorAutomatico:
                                     cursor.close()
                                     conn.close()
                                     
+                                    call_duration = round(time.time() - self.call_start_time) if self.call_start_time else None
+                                    self.final_result.update({
+                                        'status': 'SUCCESS',
+                                        'attempts': self.attempt_count,
+                                        'duration': call_duration,
+                                        'audio_played': False  # Será True si luego se reproduce audio
+                                    })
+
+
                             except Error as e:
                                 logging.error(f"❌ Error actualizando BD en StasisStart: {e}")
 
@@ -992,7 +1001,7 @@ class CallManager:
             debug_log(f"Día actual para verificación de corte: {current_day}")
             
             query = """
-            SELECT a.id, a.telefono, a.outbound_call_attempts, a.corte, a.cliente,
+            SELECT a.id, a.telefono, a.outbound_call_attempts, a.corte, a.cliente, a.apellido,
                    SUM(CASE WHEN f.cerrado = 0 THEN f.saldo ELSE 0 END) AS deuda_total
             FROM afiliados a
             LEFT JOIN factura f ON a.id = f.`id-afiliado`
@@ -1019,12 +1028,13 @@ class CallManager:
             for row in results:
                 user_id = row['id']
                 cliente = row['cliente']
+                apellido = row['apellido']
                 phone = row['telefono'].strip() if row['telefono'] else ""
                 attempts = row['outbound_call_attempts'] or 0
                 corte = row['corte']
                 deuda_total = row['deuda_total']
                 
-                debug_log(f"<>Evaluando cliente {user_id}: teléfono={phone}, corte(DB)={corte}, deuda={deuda_total} nombre={cliente}")
+                debug_log(f"<>Evaluando cliente {user_id}: teléfono={phone}, corte(DB)={corte}, deuda={deuda_total} nombre={cliente} {apellido}")
                 
                 # Verificar el día de corte ..
                 if corte and corte.isdigit():
@@ -1032,7 +1042,7 @@ class CallManager:
                     is_valid_call_day = ((current_day == corte_day - 1) or (current_day >= corte_day)) and (corte_day >= current_day-3)
                     
                     if not is_valid_call_day:
-                        debug_log(f"------------------> {user_id} nombre={cliente} corte(DB)={corte} EXCLUIDO - día actual: ({current_day}) corte :({corte_day})")
+                        debug_log(f"------------------> {user_id} nombre={cliente} {apellido} corte(DB)={corte} EXCLUIDO - día actual: ({current_day}) corte :({corte_day})")
                         excluded_count += 1
                         continue
                 
@@ -1045,6 +1055,7 @@ class CallManager:
                     self.pending_calls.append({
                         "user_id": user_id,
                         "cliente": cliente,
+                        "apellido": apellido,
                         "phone_number": formatted_phone,
                         "attempts": attempts,
                         "deuda_total": deuda_total,
@@ -1159,6 +1170,7 @@ class CallManager:
             self.current_client_number = call_index
             user_id = call_data.get("user_id")
             cliente = call_data.get("cliente", "Desconocido")
+            apellido = call_data.get("apellido", "")
             phone_number = call_data.get("phone_number")
             deuda_total = call_data.get("deuda_total", 0)
             corte = call_data.get("corte", "N/A")
@@ -1169,7 +1181,7 @@ class CallManager:
             progress_log("\n" + "=" * 60)
             progress_log(f"📞 PROCESANDO CLIENTE {self.current_client_number} DE {self.total_clients}")
             progress_log(f"👤 ID Cliente: {user_id}")
-            progress_log(f"🧑‍🤝‍🧑 Nombre Cliente: {cliente}")
+            progress_log(f"🧑‍🤝‍🧑 Nombre Cliente: {cliente} {apellido}")
             progress_log(f"📱 Teléfono: {phone_number}")
             progress_log(f"💰 Deuda Total: ${deuda_total:,.2f}")
             progress_log(f"📅 Día de Corte: {corte}")
