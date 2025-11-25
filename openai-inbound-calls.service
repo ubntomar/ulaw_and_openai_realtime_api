@@ -1,0 +1,42 @@
+[Unit]
+Description=OpenAI Realtime API - Inbound Calls Handler
+Documentation=file:///usr/local/asterisk/README.md
+After=network.target asterisk.service
+Requires=asterisk.service
+# Si Asterisk se reinicia, reiniciar este servicio también
+PartOf=asterisk.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/usr/local/asterisk
+
+# Cargar variables de entorno desde el archivo .env
+EnvironmentFile=/usr/local/asterisk/.env
+
+# Comando para ejecutar el script
+ExecStart=/usr/bin/python3 /usr/local/asterisk/inbound_calls/handle_incoming_call.py
+
+# Reintentar automáticamente si el servicio falla
+Restart=always
+RestartSec=10
+
+# Timeout para iniciar y detener
+TimeoutStartSec=30
+TimeoutStopSec=30
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=openai-inbound
+
+# Recursos y seguridad
+# Límite de memoria (ajustar según necesidad)
+MemoryLimit=512M
+
+# Límite de archivos abiertos
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

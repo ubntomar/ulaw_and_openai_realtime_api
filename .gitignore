@@ -1,15 +1,30 @@
-# Ignorar todos los archivos
+# ====================================================================
+# CONFIGURACIÓN DE SEGURIDAD - NO SUBIR CREDENCIALES
+# ====================================================================
+
+# CRÍTICO: Archivos con credenciales sensibles (NUNCA subir)
+.env
+*.env
+!.env.example
+
+# Ignorar todos los archivos por defecto
 *
 
-# Exceptuar los archivos .py
+# Exceptuar archivos que SÍ queremos en el repositorio
 !*.py
 !*.sh
-# Permitir .gitignore para no perderlo
 !.gitignore
+!.env.example
+!*.md
+!*.service
 
+# Directorios del proyecto
 !outbound_calls/
 !inbound_calls/
 !README.md
 !run_outbound_calls.py
 !run_inbound_calls.py
+
+# Archivos de log (no subir)
+*.log
 

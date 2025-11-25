@@ -435,7 +435,20 @@ class OpenAIClient:
         else:
             logging.info("API Key de OpenAI configurada")
 
-        self.url = "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-12-17"
+        # Modelo de OpenAI Realtime API
+        # IMPORTANTE: Verifica en https://platform.openai.com/docs/models que el modelo esté disponible
+        #
+        # Versiones disponibles (verificadas Nov 2025):
+        # - gpt-4o-realtime-preview-2024-12-17 (estable, probada, RECOMENDADA)
+        # - gpt-4o-realtime-preview-2024-10-01 (versión anterior)
+        #
+        # Versiones más recientes (verificar disponibilidad en tu región):
+        # - gpt-4o-realtime-preview-2025-01-21 (si está disponible)
+        #
+        # Para cambiar de modelo, modifica el parámetro 'model=' en la URL:
+        model_name = os.getenv("OPENAI_REALTIME_MODEL", "gpt-4o-realtime-preview-2024-12-17")
+        self.url = f"wss://api.openai.com/v1/realtime?model={model_name}"
+        logging.info(f"Usando modelo OpenAI Realtime: {model_name}")
         self.headers = [
             "Authorization: Bearer " + self.api_key,
             "OpenAI-Beta: realtime=v1"
@@ -1300,9 +1313,9 @@ class AsteriskApp:
         4. Maneja errores y logging
         """
         try:
-            # Construimos la URL del WebSocket con las credenciales
-            ws_url = f"ws://localhost:8088/ari/events?api_key={self.username}:{self.password}&app=openai-app"
-            logging.info("Iniciando conexión ARI")
+            # Construimos la URL del WebSocket con las credenciales usando variables de entorno
+            ws_url = f"ws://{ASTERISK_HOST}:{ASTERISK_PORT}/ari/events?api_key={self.username}:{self.password}&app=openai-app"
+            logging.info(f"Iniciando conexión ARI a {ASTERISK_HOST}:{ASTERISK_PORT}")
             
             # Bucle principal de reconexión
             while True:
