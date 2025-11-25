@@ -248,7 +248,52 @@ Además, hay un timeout global del script de 300 segundos (5 minutos) más 300 s
 
 ## Ejecución del Script
 
-### Ejecución Manual
+### Consultar Llamadas Programadas para Hoy
+
+Antes de ejecutar las llamadas, puedes consultar qué clientes serían llamados hoy usando el script de consulta:
+
+```bash
+# Opción 1: Script simple
+./ver_llamadas.sh
+
+# Opción 2: Script Python directamente
+python3 ver_llamadas_hoy.py
+```
+
+Este script muestra:
+- ✅ Lista de clientes que serán llamados hoy
+- ❌ Lista de clientes excluidos y las razones
+- 💰 Deuda total de clientes a llamar
+- 📊 Estadísticas detalladas por cliente
+
+**Características del script de consulta:**
+- NO realiza llamadas reales, solo consulta la base de datos
+- Aplica las mismas reglas de filtrado que el script de llamadas
+- Muestra información detallada: ID, nombre, teléfono, deuda, día de corte, intentos previos
+- Útil para verificar antes de ejecutar las llamadas automáticas
+
+**Ejemplo de salida:**
+
+```
+================================================================================
+📅 CONSULTA DE LLAMADAS PROGRAMADAS PARA HOY: 2025-11-25
+📆 Día del mes actual: 25
+================================================================================
+
+✅ Clientes que SERÁN llamados hoy: 5
+
++-----+------+-----------------------+--------------+---------+---------+------------+
+|   # |   ID | Nombre                |     Teléfono | Deuda   |   Corte |   Intentos |
++=====+======+=======================+==============+=========+=========+============+
+|   1 | 1616 | Luis Hugo Garcia      | 573218260348 | $60,000 |      24 |          0 |
+|   2 | 1618 | Maria Rodriguez       | 573145678901 | $45,000 |      25 |          1 |
+...
++-----+------+-----------------------+--------------+---------+---------+------------+
+
+💰 Deuda total de clientes a llamar: $305,000
+```
+
+### Ejecución Manual de Llamadas
 
 ```bash
 python3 outbound_calls/mysql_overdue_client_call.py
