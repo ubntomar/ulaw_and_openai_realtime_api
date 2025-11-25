@@ -265,7 +265,7 @@ Para ejecutar el script automáticamente a una hora específica cada día, puede
 
 2. Añade una línea para ejecutar el script a las 8:00 AM todos los días:
    ```bash
-   0 8 * * * cd /usr/local/bin && export ASTERISK_USERNAME=Asterisk && export ASTERISK_PASSWORD=your_password && export MYSQL_DATABASE=database && export MYSQL_PASSWORD=password && export MYSQL_SERVER=server && export MYSQL_USER=user && python3 outbound_calls/mysql_overdue_client_call.py >> /tmp/llamadas_automaticas.log 2>&1
+   0 8 * * * cd /usr/local/asterisk && export ASTERISK_USERNAME=Asterisk && export ASTERISK_PASSWORD=your_password && export MYSQL_DATABASE=database && export MYSQL_PASSWORD=password && export MYSQL_SERVER=server && export MYSQL_USER=user && python3 outbound_calls/mysql_overdue_client_call.py >> /tmp/llamadas_automaticas.log 2>&1
    ```
 
    Asegúrate de reemplazar:
@@ -292,7 +292,7 @@ Para gestionar el script como un servicio, puedes crear un archivo de servicio s
    [Service]
    Type=simple
    User=asterisk
-   WorkingDirectory=/usr/local/bin
+   WorkingDirectory=/usr/local/asterisk
    Environment="ASTERISK_USERNAME=Asterisk"
    Environment="ASTERISK_PASSWORD=your_password"
    Environment="MYSQL_DATABASE=database"

@@ -118,18 +118,18 @@ main() {
         log_message "✅ VALIDACIÓN EXITOSA: Procediendo con las llamadas automáticas"
         
         # Navegar al directorio correcto del script
-        cd /usr/local/bin/outbound_calls
+        cd /usr/local/asterisk/outbound_calls
         
         if [ $? -eq 0 ]; then
             log_message "📁 Cambiado al directorio: $(pwd)"
         else
-            log_message "❌ ERROR: No se pudo cambiar al directorio /usr/local/bin/outbound_calls"
+            log_message "❌ ERROR: No se pudo cambiar al directorio /usr/local/asterisk/outbound_calls"
             return 1
         fi
         
         # Verificar que el script Python existe
-        file_path="/usr/local/bin/outbound_calls/llamada_clientes_moroso.py"
-        file2_path="/usr/local/bin/outbound_calls/test_single_call.py"
+        file_path="/usr/local/asterisk/outbound_calls/llamada_clientes_moroso.py"
+        file2_path="/usr/local/asterisk/outbound_calls/test_single_call.py"
         active_path=$file_path
         if [ -f "$active_path" ]; then
             log_message "📄 Script Python encontrado: $active_path"
@@ -175,7 +175,7 @@ main
 # a clientes con facturas pendientes de pago.
 #
 # Configuración de cron actual:
-# 47 16 * * * /usr/local/bin/run_outbound_calls.sh
+# 47 16 * * * /usr/local/asterisk/run_outbound_calls.sh
 #
 # El script realiza las siguientes validaciones:
 # 1. Verifica que el trunk SIP voip_issabel esté activo
