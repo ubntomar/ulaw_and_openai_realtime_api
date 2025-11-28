@@ -297,15 +297,26 @@ tail -f /var/log/asterisk/full | grep -E "(StasisStart|Answer|Hangup)"
 
 ## 🐛 Solución de Problemas
 
-### Problema: GPT asistente está mudo
+### Problema: Asistente se queda mudo durante consultas largas
+
+**Síntoma:** El asistente dice "un momento por favor" y nunca vuelve a responder
+
+**Causa:** Las consultas largas (>20s) bloqueaban el thread del WebSocket, impidiendo que responda a pings de OpenAI. Después de ~30s, OpenAI cierra la conexión (error 1011: keepalive ping timeout).
+
+**Solución Implementada:** Threading asíncrono en `handle_function_call_done()` (líneas 666-721)
+- Las funciones ahora se ejecutan en un thread separado
+- El WebSocket principal queda libre para manejar pings
+- Ver documentación completa: `docs/SOLUCION_FINAL_THREADING.md`
+
+### Problema: GPT asistente está mudo desde el inicio
 
 **Causa:** Error en WebSocket de OpenAI con ping_interval/ping_timeout
 
 **Solución:** Verificar en `handle_incoming_call.py`:
 ```python
 ws.run_forever(
-    ping_interval=60,  # DEBE SER MAYOR que ping_timeout
-    ping_timeout=20
+    ping_interval=90,  # DEBE SER MAYOR que ping_timeout
+    ping_timeout=30
 )
 ```
 
@@ -330,9 +341,17 @@ systemctl restart asterisk
 
 ## 📚 Documentación Adicional
 
+### Documentación Técnica Principal
+- **[SOLUCION_FINAL_THREADING.md](docs/SOLUCION_FINAL_THREADING.md)** - ⭐ Solución de threading para consultas largas
 - **[TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)** - Guía completa de solución de problemas
 - **[FUNCTION_CALLING_GUIDE.md](docs/FUNCTION_CALLING_GUIDE.md)** - Cómo usar function calling con OpenAI
 - **[INTEGRATION_SUMMARY.md](docs/INTEGRATION_SUMMARY.md)** - Integración con API de MikroTik
+- **[TESTING_GUIDE.md](docs/TESTING_GUIDE.md)** - Guía de pruebas y validación
+
+### Documentación de Desarrollo
+- **[CAMBIOS_FEEDBACK_PROGRESIVO.md](docs/CAMBIOS_FEEDBACK_PROGRESIVO.md)** - Historia del desarrollo de la solución
+- **[MEJORAS_KEEPALIVE_Y_TIMEOUT.md](docs/MEJORAS_KEEPALIVE_Y_TIMEOUT.md)** - Mejoras en configuración de WebSocket
+- **[PROTECCION_TIMEOUTS.md](docs/PROTECCION_TIMEOUTS.md)** - Protección contra timeouts
 
 ## 🔐 Seguridad
 
@@ -360,7 +379,16 @@ Ver archivo `CAMBIOS_REALIZADOS.md` para detalles completos.
 - ✅ Sistema de llamadas entrantes con OpenAI funcional
 - ✅ Integración con MikroTik API
 - ✅ Function calling implementado
+- ✅ **Threading asíncrono para consultas largas** (solución definitiva)
 - ✅ Corrección de bug ping_interval/ping_timeout
 - ✅ Corrección de permisos chan_sip
 - ✅ Sistema de llamadas salientes para cobranza
 - ✅ Documentación organizada en carpeta docs/
+- ✅ Scripts de prueba y monitoreo en utils/
+
+### Cambio Importante (2025-11-28)
+**Solución de Threading para Consultas Largas:**
+- Problema: Asistente mudo durante consultas >20s
+- Solución: Ejecución de funciones en threads separados
+- Resultado: Comunicación fluida durante consultas largas
+- Ver: `docs/SOLUCION_FINAL_THREADING.md`
