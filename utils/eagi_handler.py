@@ -21,15 +21,9 @@ from audioop import ulaw2lin
 import websocket
 import base64
 
-# Importar cliente de MikroTik API para function calling
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from utils.mikrotik_api_client import MikroTikAPIClient
 
-# IMPORTANTE: Este script debe usar el siguiente Dialplan en Asterisk para funcionar correctamente.
-# Configuración de dialplan  para handle_call.py ......
-
-# sudo cat /etc/asterisk/extensions.conf
-
+# Configuración de dialplan  para handle_call.py .....
+# root@vpsserver2024:/home/omar# cat /etc/asterisk/extensions.conf
 # [from-voip]
 # exten => 3241000752,1,Answer()
 #     same => n,Set(CHANNEL(audioreadformat)=ulaw)
@@ -41,84 +35,19 @@ from utils.mikrotik_api_client import MikroTikAPIClient
 # exten => external_start,1,NoOp(External Media iniciado)
 #     same => n,Return()
 
-#Reiniciar el dialplan de asterisk para que los cambios surtan efecto
-# xxx#sudo  asterisk -rx "dialplan reload"
-
-def check_environment():
-    required_vars = {
-        'ASTERISK_USERNAME': None,
-        'ASTERISK_PASSWORD': None,
-        'ASTERISK_HOST': None,
-        'ASTERISK_PORT': None,
-        'LOG_FILE_PATH': None,
-        'LOCAL_IP_ADDRESS': None
-    }
-    
-    missing_vars = []
-    
-    for var, default in required_vars.items():
-        value = os.getenv(var, default)
-        if value is None:
-            missing_vars.append(var)
-        logging.info(f"Variable {var}: {'[CONFIGURADA]' if value else '[NO CONFIGURADA]'}")
-    
-    if missing_vars:
-        logging.error(f"Variables de ambiente requeridas no encontradas: {', '.join(missing_vars)}")
-        logging.error("Por favor configure las variables antes de ejecutar el script, Usar la opción -E de sudo para preservar el entorno")
-        sys.exit(1)
-    
-    return {
-        'ASTERISK_USERNAME': os.getenv('ASTERISK_USERNAME'),
-        'ASTERISK_PASSWORD': os.getenv('ASTERISK_PASSWORD'),
-        'ASTERISK_HOST': os.getenv('ASTERISK_HOST'),
-        'ASTERISK_PORT': os.getenv('ASTERISK_PORT'),
-        'LOG_FILE_PATH': os.getenv('LOG_FILE_PATH'),
-        'LOCAL_IP_ADDRESS': os.getenv('LOCAL_IP_ADDRESS')
-    }
 
 
 
-# Verificar variables de ambiente
-env_vars = check_environment()
-
-# Usar las variables verificadas
-ASTERISK_HOST = env_vars['ASTERISK_HOST']
-ASTERISK_PORT = env_vars['ASTERISK_PORT']
-ASTERISK_USERNAME = env_vars['ASTERISK_USERNAME']
-ASTERISK_PASSWORD = env_vars['ASTERISK_PASSWORD']
-LOG_FILE_PATH = env_vars['LOG_FILE_PATH']
-LOCAL_IP_ADDRESS = env_vars['LOCAL_IP_ADDRESS']
-
-# Configuración de API MikroTik para function calling
-MIKROTIK_API_URL = os.getenv('MIKROTIK_API_URL', 'http://10.0.0.9:5050')
-ENABLE_MIKROTIK_TOOLS = os.getenv('ENABLE_MIKROTIK_TOOLS', 'true').lower() == 'true'
-
-# Verificar que el directorio existe
-log_dir = os.path.dirname(LOG_FILE_PATH)
-if not os.path.exists(log_dir):
-    os.makedirs(log_dir)
-
-# Configuración más detallada del logging
+#Configuración de logging principal para handle_call.py .....
 logging.basicConfig(
-    filename=LOG_FILE_PATH,
+    filename="/tmp/shared_openai/ari_app.log",
     level=logging.DEBUG,
     format='%(asctime)s.%(msecs)03d - %(levelname)s - %(funcName)s - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S',
-    force=True  # Forzar la configuración
+    datefmt='%Y-%m-%d %H:%M:%S'
 )
 
-# # Añadir también un handler para la consola
-console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.DEBUG)
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-console_handler.setFormatter(formatter)
-logging.getLogger('').addHandler(console_handler)
 
 
-print("Intentando escribir en log...")
-logging.info("=== TEST LOG ENTRY ===")
-logging.error("=== TEST ERROR ENTRY ===")
-print(f"Log file path: {LOG_FILE_PATH}")
 
 
 
@@ -286,6 +215,9 @@ class RTPAudioHandler:
             logging.error(f"Error en openai_client: {e}")
             return False
 
+        except Exception as e:
+            logging.error(f"Error en openai_client: {e}")
+            return False
         try:
             receive_task = asyncio.create_task(self.openai_handler.receive_response(openai_client))
         
@@ -433,8 +365,6 @@ class RTPAudioHandler:
 
 
 class OpenAIClient:
-    """Cliente OpenAI Realtime API con soporte para Function Calling"""
-
     def __init__(self):
         self.api_key = os.getenv("OPENAI_API_KEY")
         if not self.api_key:
@@ -442,16 +372,11 @@ class OpenAIClient:
         else:
             logging.info("API Key de OpenAI configurada")
 
-        # Modelo de OpenAI Realtime API
-        model_name = os.getenv("OPENAI_REALTIME_MODEL", "gpt-4o-realtime-preview-2024-12-17")
-        self.url = f"wss://api.openai.com/v1/realtime?model={model_name}"
-        logging.info(f"Usando modelo OpenAI Realtime: {model_name}")
-
+        self.url = "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-12-17"
         self.headers = [
             "Authorization: Bearer " + self.api_key,
             "OpenAI-Beta: realtime=v1"
         ]
-
         self.input_audio = None
         self.metrics = {
             'start_time': None,
@@ -459,35 +384,20 @@ class OpenAIClient:
             'chunks_received': 0,
             'total_bytes_sent': 0,
             'total_bytes_received': 0,
-            'processing_time': 0,
-            'function_calls': 0  # Nuevo: contador de llamadas a funciones
+            'processing_time': 0
         }
-
-        self.incoming_audio_queue = asyncio.Queue()
-        self.outgoing_audio_queue = asyncio.Queue()
-        self.loop = asyncio.get_event_loop()
+        self.incoming_audio_queue = asyncio.Queue()  # Para cuando WS reciba audio
+        self.outgoing_audio_queue = asyncio.Queue()  # Para enviar audio al WS
+        self.loop = asyncio.get_event_loop()  # Obtener el loop de eventos de asyncio
+        # Agregando lógica para interrumpir audio en caso de que el cliente hable mientras el asistente está hablando
         self.current_ws = None
         self.assistant_speaking = False
 
-        # NUEVO: Soporte para function calling
-        self.current_function_call = None
-        self.function_call_id = None
-        self.function_arguments_buffer = ""
-
-        # Cliente de MikroTik API
-        if ENABLE_MIKROTIK_TOOLS:
-            self.mikrotik_client = MikroTikAPIClient(api_url=MIKROTIK_API_URL)
-            logging.info("Cliente MikroTik API inicializado")
-        else:
-            self.mikrotik_client = None
-            logging.info("Herramientas MikroTik deshabilitadas")
 
     def pyload_to_openai(self, audio_data):
-        """Envía audio a la cola de salida para OpenAI"""
         self.outgoing_audio_queue.put_nowait(audio_data)
 
     def start_in_thread(self):
-        """Inicia el cliente en un thread separado"""
         thread = threading.Thread(target=self.run, daemon=True)
         thread.start()
 
@@ -496,24 +406,22 @@ class OpenAIClient:
         try:
             self.metrics['start_time'] = time.time()
 
+            # Configurar y ejecutar WebSocket
             ws = websocket.WebSocketApp(
                 self.url,
                 header=self.headers,
                 on_open=self.on_open,
                 on_message=self.on_message,
                 on_error=self.on_error,
-                on_close=self.on_close,
-                on_ping=self.on_ping,
-                on_pong=self.on_pong
+                on_close=self.on_close
             )
 
-            self.current_ws = ws
+            # Agregando lógica para interrumpir audio en caso de que el cliente hable mientras el asistente está hablando
+            self.current_ws = ws  
+
 
             logging.info("Iniciando conexión WebSocket con OpenAI")
-            ws.run_forever(
-                ping_interval=60,
-                ping_timeout=20
-            )
+            ws.run_forever()
             logging.info("Conexión WebSocket cerrada")
             return True
 
@@ -521,32 +429,17 @@ class OpenAIClient:
             logging.error(f"Error en inicio: {e}")
             return None
 
+
     def on_open(self, ws):
-        """Maneja apertura de conexión - AHORA CON TOOLS"""
+        """Maneja apertura de conexión"""
         try:
-            # Configuración base de la sesión
-            session_config = {
+            config = {
                 "type": "session.update",
                 "session": {
                     "modalities": ["audio", "text"],
                     "voice": "verse",
                     "instructions": """
-                    Eres un asistente virtual amable y profesional para soporte técnico de redes.
-
-                    Puedes ayudar con:
-                    - Consultas sobre routers MikroTik
-                    - Estado de clientes conectados
-                    - Información de tráfico de red
-                    - Estado de interfaces y gateways
-
-                    MUY IMPORTANTE - Protocolo para consultas:
-                    1. Cuando el usuario te pregunte sobre información técnica, PRIMERO di algo como:
-                       "Déjame consultar esa información" o "Un momento, verifico eso para ti"
-                    2. LUEGO usa la herramienta 'consultar_mikrotik'
-                    3. Mientras esperas la respuesta, NO te quedes en silencio
-
-                    Mantén una conversación fluida y natural. Evita silencios largos.
-                    Siempre responde de manera clara y concisa, adaptada para una conversación telefónica.
+                    Contesa de una manera amable y muy detallada.
                     """,
                     "input_audio_format": "g711_ulaw",
                     "output_audio_format": "g711_ulaw",
@@ -559,41 +452,32 @@ class OpenAIClient:
                 }
             }
 
-            # NUEVO: Agregar tools si están habilitados
-            if ENABLE_MIKROTIK_TOOLS and self.mikrotik_client:
-                session_config["session"]["tools"] = [
-                    self.mikrotik_client.get_tool_definition()
-                ]
-                session_config["session"]["tool_choice"] = "auto"
-                logging.info("✓ Herramientas MikroTik agregadas a la sesión")
 
-            ws.send(json.dumps(session_config))
-            logging.info("Configuración de sesión enviada (con tools)" if ENABLE_MIKROTIK_TOOLS else "Configuración de sesión enviada (sin tools)")
+            ws.send(json.dumps(config))
 
         except Exception as e:
             logging.error(f"Error enviando configuración: {e}")
 
     def on_message(self, ws, message):
-        """Procesa mensajes de OpenAI - AHORA CON FUNCTION CALLING"""
+        """Procesa mensajes de OpenAI"""
         try:
             data = json.loads(message)
             msg_type = data.get('type', '')
 
-            # Eventos existentes
             if msg_type == 'response.created':
                 logging.info("Sesión create creada!")
 
             elif msg_type == 'session.updated':
                 logging.info("msg_type updated recibido, ahora enviaré audio chunks")
                 asyncio.run_coroutine_threadsafe(self.handle_session_updated(ws), self.loop)
-
+            
             elif msg_type == 'response.audio.delta':
                 logging.info("++++++++++++response.audio.delta recibido++++++++++++")
                 self.handle_audio_delta(data)
-
+            
             elif msg_type == 'input_audio_buffer.speech_started':
                 logging.info("*****************************speech_<START> Recibido***********************************************")
-
+                
                 # Limpiar la cola de audio pendiente
                 while not self.incoming_audio_queue.empty():
                     try:
@@ -601,211 +485,36 @@ class OpenAIClient:
                     except asyncio.QueueEmpty:
                         break
                 logging.info("Cola de audio limpiada por detección de voz del usuario")
-
+                
+            
             elif msg_type == 'input_audio_buffer.speech_stopped':
                 logging.info("*****************************speech_<END> recibido***********************************************")
+                # self.asistente_callate = False
 
             elif msg_type == 'response.done':
                 logging.info("Respuesta final recibida response.done")
-
+            
             elif msg_type == 'response.audio_transcript.done':
-                transcript = data.get('transcript', '')
-                logging.info(f"Transcripción: {transcript}")
-
-            # NUEVO: Eventos de function calling
-            elif msg_type == 'response.function_call_arguments.delta':
-                self.handle_function_call_delta(data)
-
-            elif msg_type == 'response.function_call_arguments.done':
-                self.handle_function_call_done(ws, data)
-
-            elif msg_type == 'response.output_item.done':
-                self.handle_output_item_done(ws, data)
-
+                logging.info(f"Transcripción: {data.get('transcript', '')}")
+            
             elif msg_type == 'error':
                 self.handle_error(data)
 
-            logging.debug(f"Mensaje procesado: {msg_type}")
+            logging.debug(f"Mensaje procesado: {data}")
 
         except Exception as e:
             logging.error(f"Error procesando mensaje: {e}")
 
-    # NUEVO: Handlers para function calling
-    def handle_function_call_delta(self, data):
-        """Maneja chunks de argumentos de función que llegan por streaming"""
-        try:
-            delta = data.get('delta', '')
-            call_id = data.get('call_id', '')
-            name = data.get('name', '')
-
-            if not self.current_function_call:
-                self.current_function_call = {
-                    'call_id': call_id,
-                    'name': name,
-                    'arguments': ''
-                }
-                self.function_call_id = call_id
-                logging.info(f"🔧 Function call iniciada: {name} (call_id: {call_id})")
-
-            self.current_function_call['arguments'] += delta
-            self.function_arguments_buffer += delta
-
-            logging.debug(f"Function call delta recibido: {delta}")
-
-        except Exception as e:
-            logging.error(f"Error manejando function call delta: {e}")
-
-    def handle_function_call_done(self, ws, data):
-        """Maneja finalización de function call - EJECUTA LA FUNCIÓN"""
-        try:
-            call_id = data.get('call_id', '')
-            name = data.get('name', '')
-            arguments_str = data.get('arguments', '{}')
-
-            logging.info(f"🔧 Function call completada: {name}")
-            logging.info(f"   Arguments: {arguments_str}")
-
-            # Parsear argumentos
-            try:
-                arguments = json.loads(arguments_str)
-            except json.JSONDecodeError:
-                logging.error(f"Error parseando argumentos: {arguments_str}")
-                arguments = {}
-
-            # Ejecutar la función
-            result = self.execute_function(name, arguments)
-
-            logging.info(f"   Resultado: {result}")
-
-            # Enviar resultado de vuelta a OpenAI
-            self.send_function_result(ws, call_id, result)
-
-            # Incrementar métrica
-            self.metrics['function_calls'] += 1
-
-            # Resetear estado
-            self.current_function_call = None
-            self.function_call_id = None
-            self.function_arguments_buffer = ""
-
-        except Exception as e:
-            logging.error(f"Error manejando function call done: {e}")
-            # Enviar error a OpenAI
-            self.send_function_error(ws, call_id, str(e))
-
-    def handle_output_item_done(self, ws, data):
-        """Maneja finalización de items de output"""
-        try:
-            item = data.get('item', {})
-            item_type = item.get('type', '')
-
-            if item_type == 'function_call':
-                name = item.get('name', '')
-                logging.info(f"Output item de function call completado: {name}")
-
-        except Exception as e:
-            logging.error(f"Error manejando output item done: {e}")
-
-    def execute_function(self, name: str, arguments: dict) -> dict:
-        """Ejecuta la función solicitada por OpenAI"""
-        try:
-            logging.info(f"⚙️ Ejecutando función: {name}")
-
-            if name == "consultar_mikrotik":
-                # Extraer parámetros
-                pregunta = arguments.get('pregunta', '')
-                timeout = arguments.get('timeout', 60)
-
-                if not pregunta:
-                    return {
-                        "error": "No se proporcionó una pregunta",
-                        "response": "No recibí una pregunta para consultar."
-                    }
-
-                # Ejecutar consulta a MikroTik API
-                logging.info(f"   Pregunta: '{pregunta}'")
-                logging.info(f"   Timeout: {timeout}s")
-
-                if not self.mikrotik_client:
-                    return {
-                        "error": "MikroTik client not initialized",
-                        "response": "Lo siento, el sistema de consultas no está disponible en este momento."
-                    }
-
-                result = self.mikrotik_client.query(pregunta, timeout)
-
-                logging.info(f"   ✓ Resultado obtenido (success: {result.get('success', False)})")
-
-                return result
-
-            else:
-                logging.error(f"Función desconocida: {name}")
-                return {
-                    "error": f"Función desconocida: {name}",
-                    "response": "Lo siento, no puedo procesar esa solicitud."
-                }
-
-        except Exception as e:
-            logging.error(f"Error ejecutando función {name}: {e}")
-            return {
-                "error": str(e),
-                "response": "Ocurrió un error al procesar tu consulta. Por favor, intenta nuevamente."
-            }
-
-    def send_function_result(self, ws, call_id: str, result: dict):
-        """Envía el resultado de la función de vuelta a OpenAI"""
-        try:
-            # Crear evento de output de función
-            function_output_event = {
-                "type": "conversation.item.create",
-                "item": {
-                    "type": "function_call_output",
-                    "call_id": call_id,
-                    "output": json.dumps(result, ensure_ascii=False)
-                }
-            }
-
-            ws.send(json.dumps(function_output_event))
-            logging.info(f"📤 Function result enviado para call_id: {call_id}")
-
-            # Solicitar que el modelo continúe con la respuesta
-            response_create = {
-                "type": "response.create"
-            }
-            ws.send(json.dumps(response_create))
-            logging.info("📤 Trigger response.create enviado")
-
-        except Exception as e:
-            logging.error(f"Error enviando function result: {e}")
-
-    def send_function_error(self, ws, call_id: str, error_message: str):
-        """Envía un error de función a OpenAI"""
-        try:
-            function_output_event = {
-                "type": "conversation.item.create",
-                "item": {
-                    "type": "function_call_output",
-                    "call_id": call_id,
-                    "output": json.dumps({
-                        "error": error_message,
-                        "response": "Lo siento, ocurrió un error al procesar tu consulta."
-                    }, ensure_ascii=False)
-                }
-            }
-            ws.send(json.dumps(function_output_event))
-
-            # Trigger response para que el modelo explique el error
-            ws.send(json.dumps({"type": "response.create"}))
-
-        except Exception as e:
-            logging.error(f"Error enviando function error: {e}")
+   
 
     async def handle_session_updated(self, ws):
         """Maneja confirmación de configuración"""
         try:
             while True:
+                # Obtener audio del buffer de salida
                 audio_data = await self.outgoing_audio_queue.get()
                 self.send_audio_chunk_to_openai(ws, audio_data)
+                logging.info(f"Audios total enviado to_openai : {self.metrics['total_bytes_sent']} bytes >>>>>>>>>>>>")
 
         except asyncio.CancelledError:
             logging.info("Tarea de envío de audio a OpenAI cancelada.")
@@ -826,6 +535,11 @@ class OpenAIClient:
 
                 self.metrics['chunks_sent'] += 1
                 self.metrics['total_bytes_sent'] += len(chunk)
+
+                logging.debug(
+                    f"Chunk enviado to_openai: {len(chunk)} bytes "
+                    f"(Total: {self.metrics['total_bytes_sent']})"
+                )
             else:
                 logging.error("Error enviando chunk: Connection is already closed.")
         except Exception as e:
@@ -836,34 +550,26 @@ class OpenAIClient:
         try:
             audio_buffer = base64.b64decode(data['delta'])
             self.incoming_audio_queue.put_nowait(audio_buffer)
+            logging.debug(
+                f"Chunks audio recibido desde openai: {len(audio_buffer)} bytes "
+            )
         except Exception as e:
             logging.error(f"Error procesando audio delta: {e}")
 
     def handle_error(self, data):
         """Procesa errores de OpenAI"""
         error_msg = data.get('error', {}).get('message', 'Error desconocido')
-        error_code = data.get('error', {}).get('code', 'unknown')
-        logging.error(f"Error de OpenAI [{error_code}]: {error_msg}")
+        logging.error(f"Error de OpenAI: {error_msg}")
 
     def on_error(self, ws, error):
         """Maneja errores de WebSocket"""
         logging.error(f"Error de WebSocket: {error}")
-    
-    def on_ping(self, ws, message):
-        """Maneja mensajes ping del servidor"""
-        logging.debug(f"PING recibido del servidor: {len(message)} bytes")
-
-    def on_pong(self, ws, message):
-        """Maneja mensajes pong del servidor"""
-        logging.debug(f"PONG recibido del servidor: {len(message)} bytes")
 
     def on_close(self, ws, close_status_code, close_msg):
         """Maneja cierre de conexión"""
-        logging.info(f"Conexión cerrada: {close_status_code} - {close_msg}")
-
-        # Log de métricas finales
-        if self.metrics['function_calls'] > 0:
-            logging.info(f"📊 Total de function calls: {self.metrics['function_calls']}")
+        logging.info(
+            f"Conexión cerrada: {close_status_code} - {close_msg}"
+        )
 
 
 
@@ -1007,11 +713,11 @@ class AsteriskApp:
     def __init__(self):
         """Inicializa la aplicación ARI con todos los componentes necesarios"""
         # Configuración de conexión ARI
-        self.base_url = f'http://{ASTERISK_HOST}:{ASTERISK_PORT}/ari'
-        self.username = ASTERISK_USERNAME
-        self.password = ASTERISK_PASSWORD
+        self.base_url = 'http://localhost:8088/ari'
+        self.username = 'asterisk'
+        self.password = '-Agwist2017Ubnt1234'
         
-       
+        
         
         # Gestión de estado
         self.active_channels = set()
@@ -1047,10 +753,10 @@ class AsteriskApp:
                 ) as response:
                     if response.status == 200:
                         channel_data = await response.json()
-                        # logging.debug(
-                        #     f"Información básica del canal {channel_id}: "
-                        #     f"{json.dumps(channel_data, indent=2)}"
-                        # )
+                        logging.debug(
+                            f"Información básica del canal {channel_id}: "
+                            f"{json.dumps(channel_data, indent=2)}"
+                        )
                     else:
                         error_text = await response.text()
                         logging.error(
@@ -1072,16 +778,16 @@ class AsteriskApp:
                     'CHANNEL(rtp,port)': 'rtp_local_port',
                     'CHANNEL(rtp,srcport)': 'rtp_src_port'
                 }
-                # if channel_data and 'channelInfo' in channel_data:
-                #     logging.info(f"Información RTP completa para canal {channel_id}:")
-                #     logging.info(f"Remote Address: {channel_data['channelInfo'].get('rtp_remote_address')}")
-                #     logging.info(f"Remote Port: {channel_data['channelInfo'].get('rtp_remote_port')}")
-                #     logging.info(f"Peer IP: {channel_data['channelInfo'].get('peer_ip')}")
-                #     logging.info(f"RTP Destination: {channel_data['channelInfo'].get('rtp_dest')}")
-                #     logging.info(f"RTP Source: {channel_data['channelInfo'].get('rtp_source')}")
-                #     logging.info(f"RTP Dest Port: {channel_data['channelInfo'].get('rtp_dest_port')}")
-                #     logging.info(f"RTP Local Port: {channel_data['channelInfo'].get('rtp_local_port')}")
-                #     logging.info(f"RTP Source Port: {channel_data['channelInfo'].get('rtp_src_port')}")
+                if channel_data and 'channelInfo' in channel_data:
+                    logging.info(f"Información RTP completa para canal {channel_id}:")
+                    logging.info(f"Remote Address: {channel_data['channelInfo'].get('rtp_remote_address')}")
+                    logging.info(f"Remote Port: {channel_data['channelInfo'].get('rtp_remote_port')}")
+                    logging.info(f"Peer IP: {channel_data['channelInfo'].get('peer_ip')}")
+                    logging.info(f"RTP Destination: {channel_data['channelInfo'].get('rtp_dest')}")
+                    logging.info(f"RTP Source: {channel_data['channelInfo'].get('rtp_source')}")
+                    logging.info(f"RTP Dest Port: {channel_data['channelInfo'].get('rtp_dest_port')}")
+                    logging.info(f"RTP Local Port: {channel_data['channelInfo'].get('rtp_local_port')}")
+                    logging.info(f"RTP Source Port: {channel_data['channelInfo'].get('rtp_src_port')}")
                 if channel_data:
                     # Obtener cada variable RTP
                     for variable, key in rtp_variables.items():
@@ -1098,9 +804,9 @@ class AsteriskApp:
                                         if 'channelInfo' not in channel_data:
                                             channel_data['channelInfo'] = {}
                                         channel_data['channelInfo'][key] = var_data['value']
-                                        # logging.debug(
-                                        #     f"Variable RTP obtenida - {key}: {var_data['value']}"
-                                        # )
+                                        logging.debug(
+                                            f"Variable RTP obtenida - {key}: {var_data['value']}"
+                                        )
                         except Exception as var_error:
                             logging.warning(
                                 f"Error obteniendo variable RTP {variable}: {var_error}"
@@ -1120,10 +826,10 @@ class AsteriskApp:
                             except Exception as e:
                                 logging.warning(f"Error parseando información RTP: {e}")
 
-                    # logging.debug(
-                    #     f"Información completa del canal {channel_id}: "
-                    #     f"{json.dumps(channel_data, indent=2)}"
-                    # )
+                    logging.debug(
+                        f"Información completa del canal {channel_id}: "
+                        f"{json.dumps(channel_data, indent=2)}"
+                    )
                     return channel_data
 
         except aiohttp.ClientError as e:
@@ -1321,7 +1027,7 @@ class AsteriskApp:
                     
                     # Obtener información detallada del canal
                     channel_info = await self.get_channel_info(channel_id)
-                    # logging.debug(f"Información del canal: {json.dumps(channel_info, indent=2)}")
+                    logging.debug(f"Información del canal: {json.dumps(channel_info, indent=2)}")
                     
                     # Detectar codec
                     codec = await self.get_channel_codec(channel_id)
@@ -1377,7 +1083,7 @@ class AsteriskApp:
                         logging.error(f"Error parseando RTP dest '{rtp_dest}': {e}")
             
             # 2) Crear RTP handler y obtener puerto local
-            local_address = LOCAL_IP_ADDRESS
+            local_address = "45.61.59.204"
             rtp_handler = RTPAudioHandler()
             
             #Crear OpenAIHandler con el rtp_handler
@@ -1475,38 +1181,18 @@ class AsteriskApp:
         try:
             # Limpiar recursos del canal original
             await self.cleanup_channel(channel_id)
-
+            
             # Limpiar recursos del canal External Media si existe
             external_channel_id = f"external_{channel_id}"
             if external_channel_id in self.active_channels:
                 await self.cleanup_channel(external_channel_id)
-
-            # NUEVO: Buscar y limpiar TODOS los canales UnicastRTP asociados
-            # (a veces quedan canales huérfanos que no están en active_channels)
-            try:
-                async with aiohttp.ClientSession() as session:
-                    channels_url = f"{self.base_url}/channels"
-                    async with session.get(
-                        channels_url,
-                        auth=aiohttp.BasicAuth(self.username, self.password)
-                    ) as response:
-                        if response.status == 200:
-                            all_channels = await response.json()
-                            for ch in all_channels:
-                                ch_id = ch.get('id', '')
-                                # Cerrar canales UnicastRTP que están en openai-app
-                                if ch_id.startswith('UnicastRTP') and ch.get('dialplan', {}).get('app_name') == 'openai-app':
-                                    await self.cleanup_channel(ch_id)
-                                    logging.info(f"Canal UnicastRTP huérfano cerrado: {ch_id}")
-            except Exception as cleanup_error:
-                logging.debug(f"Error limpiando canales huérfanos: {cleanup_error}")
-
+            
             # Limpiar bridge si existe
             if channel_id in self.bridges:
                 await self.cleanup_bridge(self.bridges[channel_id])
-
+            
             logging.info(f"Recursos liberados para canal {channel_id}")
-
+            
         except Exception as e:
             logging.error(f"Error en handle_stasis_end: {e}")
             logging.exception("Detalles del error:")
@@ -1517,13 +1203,13 @@ class AsteriskApp:
             # Remover de canales activos
             if channel_id in self.active_channels:
                 self.active_channels.remove(channel_id)
-
+            
             # Limpiar RTP handler
             if channel_id in self.rtp_handlers:
                 handler = self.rtp_handlers[channel_id]
                 await handler.cleanup()
                 del self.rtp_handlers[channel_id]
-
+            
             # Cancelar tareas activas
             if channel_id in self.active_tasks:
                 task = self.active_tasks[channel_id]
@@ -1533,25 +1219,9 @@ class AsteriskApp:
                 except asyncio.CancelledError:
                     pass
                 del self.active_tasks[channel_id]
-
-            # NUEVO: Hacer hangup explícito del canal si es UnicastRTP (External Media)
-            try:
-                if channel_id.startswith('UnicastRTP') or channel_id.startswith('external_'):
-                    async with aiohttp.ClientSession() as session:
-                        hangup_url = f"{self.base_url}/channels/{channel_id}"
-                        async with session.delete(
-                            hangup_url,
-                            auth=aiohttp.BasicAuth(self.username, self.password)
-                        ) as response:
-                            if response.status in [204, 404]:
-                                logging.info(f"Canal External Media cerrado: {channel_id}")
-                            else:
-                                logging.warning(f"Error cerrando canal {channel_id}: {response.status}")
-            except Exception as hangup_error:
-                logging.debug(f"Error haciendo hangup de {channel_id}: {hangup_error}")
-
+                
             logging.info(f"Recursos liberados para canal {channel_id}")
-
+            
         except Exception as e:
             logging.error(f"Error en cleanup_channel: {e}")
             logging.exception("Detalles del error:")
@@ -1567,9 +1237,9 @@ class AsteriskApp:
         4. Maneja errores y logging
         """
         try:
-            # Construimos la URL del WebSocket con las credenciales usando variables de entorno
-            ws_url = f"ws://{ASTERISK_HOST}:{ASTERISK_PORT}/ari/events?api_key={self.username}:{self.password}&app=openai-app"
-            logging.info(f"Iniciando conexión ARI a {ASTERISK_HOST}:{ASTERISK_PORT}")
+            # Construimos la URL del WebSocket con las credenciales
+            ws_url = f"ws://localhost:8088/ari/events?api_key={self.username}:{self.password}&app=openai-app"
+            logging.info("Iniciando conexión ARI")
             
             # Bucle principal de reconexión
             while True:
@@ -1577,8 +1247,8 @@ class AsteriskApp:
                     # Establecer conexión WebSocket
                     async with websockets.connect(
                         ws_url,
-                        ping_interval=60,  # Mantener la conexión activa
-                        ping_timeout=20    # Timeout para detectar desconexiones
+                        ping_interval=30,  # Mantener la conexión activa
+                        ping_timeout=10    # Timeout para detectar desconexiones
                     ) as websocket:
                         logging.info("Conexión ARI establecida")
                         
@@ -1593,9 +1263,6 @@ class AsteriskApp:
                 except Exception as e:
                     # Otros errores inesperados
                     logging.error(f"Error en la conexión: {e}")
-                    logging.info(f"Conectando a Asterisk en {self.base_url}")
-                    logging.info(f"Usuario: {ASTERISK_USERNAME}")
-                    logging.info(f"Contraseña: {ASTERISK_PASSWORD}")
                     logging.exception("Detalles del error:")
                     await asyncio.sleep(5)
                     

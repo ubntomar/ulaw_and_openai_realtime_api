@@ -10,7 +10,7 @@ import time
 from datetime import datetime, timedelta
 
 # Configuration
-DESTINATION_NUMBER = "5731476546555"  # Phone number with country prefix 57xxxxxxxxx
+DESTINATION_NUMBER = "573001234567"  # Phone number with country prefix 57xxxxxxxxx (example)
 ARI_URL = "http://localhost:8088/ari"
 WEBSOCKET_URL = "ws://localhost:8088/ari/events"
 USERNAME = os.getenv('ASTERISK_USERNAME')

@@ -1,78 +1,104 @@
-# Sistema de Llamadas Automáticas para Clientes con Pagos Pendientes
+# Sistema Integrado de Telefonía con Asterisk y OpenAI
 
-Este sistema Python permite gestionar llamadas automáticas a clientes con facturas pendientes de pago, especialmente enfocadas en los días cercanos a su fecha de corte de servicio.
+Sistema completo de gestión telefónica que combina:
+1. **Llamadas entrantes** con asistente de IA (OpenAI Realtime API)
+2. **Llamadas salientes** automatizadas para cobranza
 
-## Descripción
+## 🚀 Características Principales
 
-El script `mysql_overdue_client_call.py` consulta una base de datos MySQL para identificar clientes con facturas pendientes, realiza llamadas automáticas utilizando Asterisk, reproduce un mensaje informativo y registra los resultados en la base de datos.
+### Sistema de Llamadas Entrantes (OpenAI)
+- Asistente virtual con voz en tiempo real
+- Integración con API de MikroTik para consultas de red
+- Function calling para consultas técnicas
+- Manejo de audio bidireccional en tiempo real
+- Soporte para codec ulaw/alaw
 
-### Características principales
+### Sistema de Llamadas Salientes (Cobranza)
+- Llamadas automáticas a clientes con pagos pendientes
+- Integración con MySQL para gestión de clientes
+- Reproducción de mensajes de voz personalizados
+- Sistema de reintentos inteligente
+- Registro de resultados en base de datos
 
-- Integración con MySQL para obtener datos de clientes con facturas pendientes
-- Validación de números de teléfono móviles colombianos
-- Lógica de llamadas basada en días de corte del servicio
-- Sistema de timeout por llamada para evitar costos excesivos
-- Manejo completo del ciclo de vida de la llamada (iniciación, monitoreo, finalización)
-- Actualización automática de registros en base de datos
-- Sistema robusto de reintentos para llamadas fallidas
+## 📋 Requisitos
 
-## Requisitos
+### Dependencias del Sistema
+```bash
+# Asterisk con módulos
+- chan_sip
+- res_ari
+- app_stasis
+
+# Python 3.10+
+sudo apt install python3 python3-pip
+
+# FFmpeg para conversión de audio
+sudo apt install ffmpeg
+```
 
 ### Dependencias Python
-
 ```bash
-pip install mysql-connector-python aiohttp websockets asyncio
+pip install aiohttp websockets asyncio mysql-connector-python requests websocket-client
 ```
 
-### Variables de Entorno
+## ⚙️ Configuración
 
-El script requiere las siguientes variables de entorno:
+### 1. Variables de Entorno
 
-1. Para conexión a Asterisk:
-   - `ASTERISK_USERNAME`
-   - `ASTERISK_PASSWORD`
-
-2. Para conexión a MySQL:
-   - `MYSQL_DATABASE`
-   - `MYSQL_PASSWORD`
-   - `MYSQL_SERVER`
-   - `MYSQL_USER`
-
-## Configuración del Entorno Asterisk
-
-### 1. Configuración del Dialplan
-
-El archivo `/etc/asterisk/extensions.conf` debe tener configurados los contextos y extensions necesarios. A continuación se muestra la configuración actualizada:
-
-#### Editar el archivo extensions.conf
+Crea el archivo `/usr/local/asterisk/.env`:
 
 ```bash
-sudo nano /etc/asterisk/extensions.conf
+# Asterisk ARI
+ASTERISK_USERNAME=Asterisk
+ASTERISK_PASSWORD=tu_password_ari
+ASTERISK_HOST=localhost
+ASTERISK_PORT=8088
+
+# OpenAI Realtime API
+OPENAI_API_KEY=sk-proj-XXXXXXXXXXXX
+OPENAI_REALTIME_MODEL=gpt-4o-realtime-preview-2024-12-17
+
+# MikroTik API (opcional)
+MIKROTIK_API_URL=http://10.0.0.9:5050
+ENABLE_MIKROTIK_TOOLS=true
+
+# MySQL (para sistema de cobranza)
+MYSQL_SERVER=localhost
+MYSQL_USER=tu_usuario
+MYSQL_PASSWORD=tu_password
+MYSQL_DATABASE=isp_database
+
+# Red
+LOCAL_IP_ADDRESS=45.61.59.204
+
+# Logs
+LOG_FILE_PATH=/var/log/asterisk/inbound_openai.log
 ```
 
-#### Configuración actual del dialplan
+### 2. Configuración de Asterisk
 
+#### `/etc/asterisk/extensions.conf`
 ```ini
 [from-voip]
-; Regla específica para llamadas entrantes al número específico
+; Llamadas entrantes con OpenAI
 exten => 3241000752,1,Answer()
     same => n,Set(CHANNEL(audioreadformat)=ulaw)
     same => n,Set(CHANNEL(audiowriteformat)=ulaw)
     same => n,Stasis(openai-app)
     same => n,Hangup()
-    
-; Regla general para llamadas salientes (cualquier otro número)
+
+; Llamadas salientes
 exten => _X.,1,NoOp(Llamada saliente a ${EXTEN})
     same => n,Set(CHANNEL(audioreadformat)=ulaw)
     same => n,Set(CHANNEL(audiowriteformat)=ulaw)
     same => n,Dial(SIP/voip_issabel/${EXTEN})
     same => n,Stasis(overdue-app)
     same => n,Hangup()
-    
+
 [stasis-openai]
 exten => external_start,1,NoOp(External Media iniciado para OpenAI)
     same => n,Return()
-    
+
 [stasis-overdue]
 exten => _X.,1,NoOp(Llamada en Stasis para clientes morosos: ${EXTEN})
     same => n,Answer()
@@ -80,67 +106,7 @@ exten => _X.,1,NoOp(Llamada en Stasis para clientes morosos: ${EXTEN})
     same => n,Return()
 ```
 
-#### Explicación de los contextos:
-
-1. **from-voip**: Este contexto maneja tanto las llamadas entrantes al número específico (3241000752) como las llamadas salientes a través del trunk SIP.
-
-2. **stasis-openai**: Este contexto maneja las llamadas procesadas por la aplicación openai-app.
-
-3. **stasis-overdue**: Este contexto maneja las llamadas procesadas por la aplicación overdue-app.
-
-#### Aplicar los cambios al dialplan
-
-Después de realizar cambios, debes recargar el dialplan para que Asterisk los aplique:
-
-```bash
-sudo asterisk -rx 'dialplan reload'
-```
-
-#### Verificar que el dialplan esté cargado correctamente
-
-```bash
-sudo asterisk -rx 'dialplan show stasis-overdue'
-```
-
-Este comando debería mostrar el contexto que acabas de crear.
-
-### 2. Archivos de Audio
-
-- Formato: `.gsm`
-- Ubicación: `/usr/share/asterisk/sounds/es_MX/`
-- Nombre del archivo: `morosos_natalia.gsm` (según configuración actual en el script)
-- Permisos: `644` (-rw-r--r--)
-- Propietario: `asterisk:asterisk`
-
-```bash
-sudo chown asterisk:asterisk /usr/share/asterisk/sounds/es_MX/morosos_natalia.gsm
-sudo chmod 644 /usr/share/asterisk/sounds/es_MX/morosos_natalia.gsm
-```
-
-### 3. Conectividad
-
-- El servicio Asterisk debe estar en ejecución
-- La API ARI debe estar habilitada: `http://localhost:8088/ari`
-- El WebSocket debe estar disponible: `ws://localhost:8088/ari/events`
-
-### 4. Configuración SIP
-
-- El trunk SIP `voip_issabel` debe estar configurado y funcional
-
-### 5. Aplicación ARI
-
-La API de Asterisk REST Interface (ARI) debe estar correctamente configurada para permitir que nuestro script interactúe con Asterisk.
-
-#### Configurar ari.conf
-
-Editar el archivo de configuración ARI:
-
-```bash
-sudo nano /etc/asterisk/ari.conf
-```
-
-Añadir la siguiente configuración:
-
+#### `/etc/asterisk/ari.conf`
 ```ini
 [general]
 enabled = yes
@@ -150,364 +116,251 @@ allowed_origins = *
 [Asterisk]
 type = user
 read_only = no
-password = your_password
+password = tu_password_ari
 password_format = plain
 ```
 
-Reemplaza `Asterisk` y `your_password` con los valores de `ASTERISK_USERNAME` y `ASTERISK_PASSWORD` que utilizará el script. Estos valores deben coincidir con las variables de entorno.
+#### `/etc/asterisk/sip.conf`
+```ini
+[general]
+context=from-voip
+allowguest=yes
+udpbindaddr=0.0.0.0:5060
+tcpenable=no
+transport=udp
+qualify=yes
+nat=force_rport,comedia
+externip=TU_IP_PUBLICA
+localnet=192.168.0.0/255.255.255.0
 
-#### Aplicar cambios
+register => usuario:password@voip.proveedor.com/numero
 
-Después de realizar cambios en ari.conf, es necesario reiniciar Asterisk:
+[voip_issabel]
+type=friend
+host=voip.proveedor.com
+port=5060
+username=usuario
+secret=password
+fromuser=usuario
+fromdomain=voip.proveedor.com
+nat=force_rport,comedia
+insecure=port,invite
+disallow=all
+allow=ulaw
+allow=alaw
+dtmfmode=rfc2833
+context=from-voip
+qualify=yes
+```
+
+**IMPORTANTE:** Después de modificar configuraciones:
+```bash
+# Recargar dialplan
+asterisk -rx "dialplan reload"
+
+# Recargar SIP
+asterisk -rx "sip reload"
+
+# O reiniciar Asterisk completamente
+systemctl restart asterisk
+```
+
+### 3. Servicio systemd
+
+Archivo: `/etc/systemd/system/openai-inbound-calls.service`
+
+```ini
+[Unit]
+Description=OpenAI Realtime API - Inbound Calls Handler
+Documentation=file:///usr/local/asterisk/README.md
+After=network.target asterisk.service
+Requires=asterisk.service
+
+[Service]
+Type=simple
+User=asterisk
+Group=asterisk
+WorkingDirectory=/usr/local/asterisk/inbound_calls
+EnvironmentFile=/usr/local/asterisk/.env
+ExecStart=/usr/bin/python3 /usr/local/asterisk/inbound_calls/handle_incoming_call.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=openai-inbound
+
+# Límites de recursos
+MemoryLimit=512M
+CPUQuota=50%
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Activar el servicio:
+```bash
+systemctl daemon-reload
+systemctl enable openai-inbound-calls.service
+systemctl start openai-inbound-calls.service
+systemctl status openai-inbound-calls.service
+```
+
+## 🗂️ Estructura del Proyecto
+
+```
+/usr/local/asterisk/
+├── docs/                              # Documentación
+│   ├── TROUBLESHOOTING.md            # Guía de solución de problemas
+│   ├── FUNCTION_CALLING_GUIDE.md     # Guía de function calling con OpenAI
+│   ├── INTEGRATION_SUMMARY.md        # Integración con MikroTik
+│   └── otros documentos técnicos
+├── inbound_calls/                     # Sistema de llamadas entrantes
+│   └── handle_incoming_call.py       # Script principal OpenAI
+├── outbound_calls/                    # Sistema de llamadas salientes
+│   └── llamada_clientes_moroso.py    # Script de cobranza
+├── utils/                             # Utilidades y pruebas
+│   ├── mikrotik_api_client.py        # Cliente API MikroTik
+│   ├── demo_overdue_call.py          # Demo de llamadas salientes
+│   ├── test_*.py                      # Scripts de prueba
+│   └── monitor_*.sh                   # Scripts de monitoreo
+├── .env                               # Variables de entorno (NO subir a git)
+├── .gitignore                         # Archivos ignorados por git
+└── README.md                          # Este archivo
+```
+
+## 🔧 Uso
+
+### Llamadas Entrantes (OpenAI)
+
+El servicio se ejecuta automáticamente y escucha llamadas entrantes:
 
 ```bash
-sudo systemctl restart asterisk
+# Ver estado
+systemctl status openai-inbound-calls.service
+
+# Ver logs en tiempo real
+journalctl -u openai-inbound-calls.service -f
+
+# Reiniciar servicio
+systemctl restart openai-inbound-calls.service
 ```
 
-#### Verificar configuración ARI
+### Llamadas Salientes (Cobranza)
 
-Para verificar que la API ARI esté funcionando correctamente:
+Ejecutar manualmente o vía cron:
 
 ```bash
-curl -u Asterisk:your_password http://localhost:8088/ari/applications
+cd /usr/local/asterisk/outbound_calls
+python3 llamada_clientes_moroso.py
 ```
 
-Debería recibir una respuesta JSON con las aplicaciones registradas.
-
-### 6. Permisos y Directorios
-
-- El usuario que ejecuta el script debe tener permisos para la API
-- Directorios de sonido deben tener permisos `755` (drwxr-xr-x)
-
-## Conversión de Formatos de Audio a GSM
-
-### Instalación de ffmpeg
+### Pruebas y Monitoreo
 
 ```bash
-sudo apt-get install ffmpeg
+# Probar integración MikroTik
+cd /usr/local/asterisk/utils
+python3 test_mikrotik_integration.py
+
+# Monitorear llamadas
+./monitor_calls.sh
+
+# Monitorear function calls
+./monitor_function_calls.sh
 ```
 
-### Comandos de Conversión
+## 📊 Monitoreo y Logs
 
-#### De WAV a GSM
-```bash
-ffmpeg -i input.wav -ar 8000 -ac 1 -acodec gsm output.gsm
-```
+### Logs del Sistema
+- **Asterisk general:** `/var/log/asterisk/full`
+- **Aplicación OpenAI:** `/var/log/asterisk/inbound_openai.log`
+- **Servicio systemd:** `journalctl -u openai-inbound-calls.service`
 
-#### De MP3 a GSM
-```bash
-ffmpeg -i input.mp3 -ar 8000 -ac 1 -acodec gsm output.gsm
-```
-
-#### Convertir y colocar directamente en Asterisk
-```bash
-ffmpeg -i input.mp3 -ar 8000 -ac 1 -acodec gsm /usr/share/asterisk/sounds/es_MX/morosos_natalia.gsm
-```
-
-#### Audio optimizado para telefonía
-```bash
-ffmpeg -i input.mp3 -af "highpass=f=300, lowpass=f=3400, volume=2" -ar 8000 -ac 1 -acodec gsm output.gsm
-```
-
-#### Después de convertir
-```bash
-sudo chown asterisk:asterisk /usr/share/asterisk/sounds/es_MX/morosos_natalia.gsm
-sudo chmod 644 /usr/share/asterisk/sounds/es_MX/morosos_natalia.gsm
-```
-
-## Lógica del Sistema de Llamadas
-
-### Selección de Usuarios
-
-El script selecciona usuarios para llamar basado en las siguientes condiciones:
-
-1. El campo `outbound_call` debe ser `1` (marcado para llamada)
-2. El campo `outbound_call_is_sent` debe ser `0` (no ha sido contactado aún)
-3. Deben tener facturas pendientes (`cerrado = 0` con `saldo > 0`)
-4. El día actual debe cumplir con relación al día de corte:
-   - Debe ser exactamente un día antes del corte, o
-   - Debe ser el día del corte, o
-   - Debe ser posterior al día del corte
-
-### Ejemplo de lógica de días de corte:
-
-```
-Usuario con corte el día 15:
-- Si hoy es día 14: SÍ se realiza llamada (un día antes)
-- Si hoy es día 13: NO se realiza llamada (dos días antes)
-- Si hoy es día 5: NO se realiza llamada (varios días antes)
-- Si hoy es día 15: SÍ se realiza llamada (día del corte)
-- Si hoy es día 20: SÍ se realiza llamada (después del corte)
-```
-
-### Sistema de Timeout
-
-Para evitar gastos excesivos en llamadas, cada llamada tiene un timeout individual de 90 segundos. Si este tiempo se excede, el script terminará automáticamente la llamada.
-
-Además, hay un timeout global del script de 300 segundos (5 minutos) más 300 segundos adicionales por usuario, para evitar que el script se ejecute indefinidamente.
-
-## Ejecución del Script
-
-### Consultar Llamadas Programadas para Hoy
-
-Antes de ejecutar las llamadas, puedes consultar qué clientes serían llamados hoy usando el script de consulta:
+### Comandos de Diagnóstico
 
 ```bash
-# Opción 1: Script simple
-./ver_llamadas.sh
+# Ver canales activos
+asterisk -rx "core show channels"
 
-# Opción 2: Script Python directamente
-python3 ver_llamadas_hoy.py
+# Ver estado SIP
+asterisk -rx "sip show peers"
+asterisk -rx "sip show registry"
+
+# Ver aplicaciones Stasis
+asterisk -rx "ari show apps"
+
+# Ver módulos
+asterisk -rx "module show like chan_sip"
+
+# Monitoreo en tiempo real
+tail -f /var/log/asterisk/full | grep -E "(StasisStart|Answer|Hangup)"
 ```
 
-Este script muestra:
-- ✅ Lista de clientes que serán llamados hoy
-- ❌ Lista de clientes excluidos y las razones
-- 💰 Deuda total de clientes a llamar
-- 📊 Estadísticas detalladas por cliente
+## 🐛 Solución de Problemas
 
-**Características del script de consulta:**
-- NO realiza llamadas reales, solo consulta la base de datos
-- Aplica las mismas reglas de filtrado que el script de llamadas
-- Muestra información detallada: ID, nombre, teléfono, deuda, día de corte, intentos previos
-- Útil para verificar antes de ejecutar las llamadas automáticas
+### Problema: GPT asistente está mudo
 
-**Ejemplo de salida:**
+**Causa:** Error en WebSocket de OpenAI con ping_interval/ping_timeout
 
-```
-================================================================================
-📅 CONSULTA DE LLAMADAS PROGRAMADAS PARA HOY: 2025-11-25
-📆 Día del mes actual: 25
-================================================================================
-
-✅ Clientes que SERÁN llamados hoy: 5
-
-+-----+------+-----------------------+--------------+---------+---------+------------+
-|   # |   ID | Nombre                |     Teléfono | Deuda   |   Corte |   Intentos |
-+=====+======+=======================+==============+=========+=========+============+
-|   1 | 1616 | Luis Hugo Garcia      | 573218260348 | $60,000 |      24 |          0 |
-|   2 | 1618 | Maria Rodriguez       | 573145678901 | $45,000 |      25 |          1 |
-...
-+-----+------+-----------------------+--------------+---------+---------+------------+
-
-💰 Deuda total de clientes a llamar: $305,000
-```
-
-### Ejecución Manual de Llamadas
-
-```bash
-python3 outbound_calls/mysql_overdue_client_call.py
-```
-
-### Configuración como Tarea Programada (Cron)
-
-Para ejecutar el script automáticamente a una hora específica cada día, puedes configurarlo como una tarea cron:
-
-1. Abre el editor de crontab:
-   ```bash
-   crontab -e
-   ```
-
-2. Añade una línea para ejecutar el script a las 8:00 AM todos los días:
-   ```bash
-   0 8 * * * cd /usr/local/asterisk && export ASTERISK_USERNAME=Asterisk && export ASTERISK_PASSWORD=your_password && export MYSQL_DATABASE=database && export MYSQL_PASSWORD=password && export MYSQL_SERVER=server && export MYSQL_USER=user && python3 outbound_calls/mysql_overdue_client_call.py >> /tmp/llamadas_automaticas.log 2>&1
-   ```
-
-   Asegúrate de reemplazar:
-   - Las variables de entorno con tus valores reales
-   - La ruta del log si deseas cambiarlo
-
-3. Guarda y cierra el editor.
-
-### Configuración en un Archivo de Servicio Systemd
-
-Para gestionar el script como un servicio, puedes crear un archivo de servicio systemd:
-
-1. Crea un archivo de servicio:
-   ```bash
-   sudo nano /etc/systemd/system/llamadas-automaticas.service
-   ```
-
-2. Añade el siguiente contenido:
-   ```ini
-   [Unit]
-   Description=Servicio de Llamadas Automáticas para Clientes Morosos
-   After=network.target asterisk.service mysql.service
-
-   [Service]
-   Type=simple
-   User=asterisk
-   WorkingDirectory=/usr/local/asterisk
-   Environment="ASTERISK_USERNAME=Asterisk"
-   Environment="ASTERISK_PASSWORD=your_password"
-   Environment="MYSQL_DATABASE=database"
-   Environment="MYSQL_PASSWORD=password"
-   Environment="MYSQL_SERVER=server"
-   Environment="MYSQL_USER=user"
-   ExecStart=/usr/bin/python3 outbound_calls/mysql_overdue_client_call.py
-   Restart=on-failure
-   RestartSec=60
-
-   [Install]
-   WantedBy=multi-user.target
-   ```
-
-3. Habilita y inicia el servicio:
-   ```bash
-   sudo systemctl daemon-reload
-   sudo systemctl enable llamadas-automaticas.service
-   sudo systemctl start llamadas-automaticas.service
-   ```
-
-4. Comprueba el estado del servicio:
-   ```bash
-   sudo systemctl status llamadas-automaticas.service
-   ```
-
-## Solución de Problemas
-
-### Reinicio de Servicios
-- Recargar dialplan: `sudo asterisk -rx "dialplan reload"`
-- Reiniciar Asterisk: `sudo systemctl restart asterisk`
-- Verificar estado: `sudo systemctl status asterisk`
-- Ver logs de errores: `sudo journalctl -u asterisk`
-
-### Problemas Comunes y Soluciones
-
-1. **Error "Allocation failed" al iniciar llamadas**
-   - **Síntoma**: El script muestra `Error initiating call: {"error":"Allocation failed"}`
-   - **Causa**: Normalmente se debe a falta de recursos en Asterisk o problemas de conexión
-   - **Solución**: Reiniciar el servicio Asterisk para liberar recursos
-   ```bash
-   sudo systemctl restart asterisk
-   ```
-
-2. **Error de conexión a la base de datos**
-   - **Verificación**: Comprobar credenciales MySQL y conectividad
-   ```bash
-   mysql -h $MYSQL_SERVER -u $MYSQL_USER -p$MYSQL_PASSWORD -e "SELECT 1"
-   ```
-
-3. **Error en la API de Asterisk**
-   - **Verificación**: Comprobar que Asterisk esté en ejecución y que la API esté habilitada
-   ```bash
-   sudo systemctl status asterisk
-   curl -u $ASTERISK_USERNAME:$ASTERISK_PASSWORD http://localhost:8088/ari/applications
-   ```
-
-4. **Audio no se reproduce**
-   - **Verificación**: Comprobar permisos y formato del archivo de audio
-   ```bash
-   ls -la /usr/share/asterisk/sounds/es_MX/morosos_natalia.gsm
-   ```
-   - **Solución**: Convertir el audio nuevamente al formato correcto y establecer permisos adecuados
-
-5. **Llamadas no se realizan**
-   - **Verificación**: Comprobar configuración del trunk SIP
-   ```bash
-   sudo asterisk -rx "sip show peers" | grep voip_issabel
-   ```
-
-6. **Error en la consulta SQL**
-   - **Verificación**: Comprobar estructura de tablas y ejecutar consultas de prueba
-   ```bash
-   mysql -h $MYSQL_SERVER -u $MYSQL_USER -p$MYSQL_PASSWORD $MYSQL_DATABASE -e "DESCRIBE afiliados"
-   mysql -h $MYSQL_SERVER -u $MYSQL_USER -p$MYSQL_PASSWORD $MYSQL_DATABASE -e "DESCRIBE factura"
-   ```
-
-7. **El script termina abruptamente**
-   - **Verificación**: Comprobar logs para identificar timeouts o errores
-   ```bash
-   tail -n 100 /tmp/overdue_client_calls.log
-   ```
-
-## Registros y Depuración
-
-### Logs del sistema
-Los logs del script se almacenan en:
-```
-/tmp/overdue_client_calls.log
-```
-
-### Depuración Avanzada
-Para una depuración más detallada, puedes habilitar más logging en el script cambiando el nivel a DEBUG:
-
+**Solución:** Verificar en `handle_incoming_call.py`:
 ```python
-logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s.%(msecs)03d - %(levelname)s - %(funcName)s - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S',
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler('/tmp/overdue_client_calls.log')
-    ]
+ws.run_forever(
+    ping_interval=60,  # DEBE SER MAYOR que ping_timeout
+    ping_timeout=20
 )
 ```
 
-## Estructura de la Base de Datos
+### Problema: Módulo chan_sip no carga
 
-### Tabla `afiliados`
-Contiene información de los clientes y su estado de pago.
+**Causa:** Permisos incorrectos en `/etc/asterisk/sip.conf`
 
-Campos relevantes:
-- `id`: Identificador único del cliente
-- `telefono`: Número de teléfono móvil
-- `corte`: Día del mes en que se realiza el corte del servicio
-- `outbound_call`: Marcador para realizar llamada (1=sí, 0=no)
-- `outbound_call_is_sent`: Si ya se realizó la llamada (1=sí, 0=no)
-- `outbound_call_attempts`: Número de intentos realizados
-- `outbound_call_completed_at`: Fecha de completado
-
-### Tabla `factura`
-Contiene información de las facturas de los clientes.
-
-Campos relevantes:
-- `id-afiliado`: ID del cliente (referencia a afiliados.id)
-- `saldo`: Monto pendiente de pago
-- `cerrado`: Estado de la factura (1=pagado, 0=pendiente)
-
-## Mantenimiento
-
-Se recomienda verificar periódicamente:
-
-1. Logs del sistema para detectar problemas de timeouts o errores
-2. Base de datos para confirmar que los registros se actualizan correctamente
-3. Calidad del audio para asegurar la comprensión del mensaje
-4. Estado del servicio Asterisk para prevenir problemas de recursos
-
-### Comprobaciones regulares recomendadas:
-
+**Solución:**
 ```bash
-# Verificar estado del servicio Asterisk
-sudo systemctl status asterisk
-
-# Verificar conexiones SIP activas
-sudo asterisk -rx "sip show peers"
-
-# Verificar canales activos
-sudo asterisk -rx "core show channels"
-
-# Verificar aplicaciones ARI
-sudo asterisk -rx "ari show apps"
-
-# Verificar uso de recursos del sistema
-top -b -n 1 | head -n 20
-df -h
-free -m
+chown asterisk:asterisk /etc/asterisk/sip.conf
+systemctl restart asterisk
 ```
 
-**Problema Identificado y Solucionado:**
+### Problema: Llamadas se cuelgan inmediatamente
 
-- **Diagnóstico correcto:** El error "Allocation failed" NO era por tu código.
-- **Causa real:** Trunk SIP en estado UNKNOWN.
-- **Solución:** Reinicio de Asterisk restauró la conectividad:
-  ```bash
-  sudo systemctl restart asterisk
-  ```
+**Verificar:**
+1. SIP trunk registrado: `asterisk -rx "sip show registry"`
+2. Módulo chan_sip activo: `asterisk -rx "module show like chan_sip"`
+3. Configuración allowguest en sip.conf
 
-Actualmente puedes revisar los logs del sistema en `/tmp/overdue_client_calls.log` , `~/outbound_calls.log`
+**Ver guía completa:** `docs/TROUBLESHOOTING.md`
 
+## 📚 Documentación Adicional
 
-## Contacto y Soporte
+- **[TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)** - Guía completa de solución de problemas
+- **[FUNCTION_CALLING_GUIDE.md](docs/FUNCTION_CALLING_GUIDE.md)** - Cómo usar function calling con OpenAI
+- **[INTEGRATION_SUMMARY.md](docs/INTEGRATION_SUMMARY.md)** - Integración con API de MikroTik
 
-Para problemas técnicos o consultas sobre este sistema, contactar al equipo de desarrollo responsable del mantenimiento.
+## 🔐 Seguridad
+
+**IMPORTANTE:**
+- El archivo `.env` contiene credenciales sensibles y NO debe subirse a git
+- Ya está incluido en `.gitignore`
+- Cambiar contraseñas por defecto en producción
+- Usar HTTPS/WSS en producción para APIs externas
+- Revisar `allowguest=yes` en sip.conf (solo para desarrollo)
+
+## 📝 Licencia
+
+Proyecto privado - Todos los derechos reservados
+
+## 👥 Autores
+
+- Omar - Propietario del proyecto
+- Desarrollado con asistencia de Claude Code
+
+## 🔄 Historial de Cambios
+
+Ver archivo `CAMBIOS_REALIZADOS.md` para detalles completos.
+
+### Versión Actual (Nov 2025)
+- ✅ Sistema de llamadas entrantes con OpenAI funcional
+- ✅ Integración con MikroTik API
+- ✅ Function calling implementado
+- ✅ Corrección de bug ping_interval/ping_timeout
+- ✅ Corrección de permisos chan_sip
+- ✅ Sistema de llamadas salientes para cobranza
+- ✅ Documentación organizada en carpeta docs/
