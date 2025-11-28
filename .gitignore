@@ -22,6 +22,7 @@
 !outbound_calls/
 !inbound_calls/
 !utils/
+!docs/
 !README.md
 !run_outbound_calls.py
 !run_inbound_calls.py
