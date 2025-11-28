@@ -510,9 +510,12 @@ class OpenAIClient:
             self.current_ws = ws
 
             logging.info("Iniciando conexión WebSocket con OpenAI")
+            # Ejecutar WebSocket con ping/pong automático
+            # ping_interval debe ser mayor que ping_timeout
+            # Configurado para mantener la conexión viva durante consultas largas (60s+)
             ws.run_forever(
-                ping_interval=60,
-                ping_timeout=20
+                ping_interval=90,  # Enviar ping cada 90 segundos
+                ping_timeout=30    # Esperar 30s por pong antes de timeout
             )
             logging.info("Conexión WebSocket cerrada")
             return True
@@ -540,13 +543,18 @@ class OpenAIClient:
                     - Estado de interfaces y gateways
 
                     MUY IMPORTANTE - Protocolo para consultas:
-                    1. Cuando el usuario te pregunte sobre información técnica, PRIMERO di algo como:
-                       "Déjame consultar esa información" o "Un momento, verifico eso para ti"
-                    2. LUEGO usa la herramienta 'consultar_mikrotik'
-                    3. Mientras esperas la respuesta, NO te quedes en silencio
+                    1. Cuando el usuario te pregunte sobre información técnica, PRIMERO di:
+                       "Un momento, estoy consultando esa información para ti"
+                    2. LUEGO usa inmediatamente la herramienta 'consultar_mikrotik'
+                    3. Cuando recibas la respuesta, presenta los datos de forma clara y concisa
+                    4. Si una consulta tarda más de lo esperado, la herramienta te avisará
 
-                    Mantén una conversación fluida y natural. Evita silencios largos.
-                    Siempre responde de manera clara y concisa, adaptada para una conversación telefónica.
+                    IMPORTANTE: Las consultas que involucran múltiples routers pueden tomar 10-30 segundos.
+                    El usuario ya sabrá que estás consultando porque se lo dijiste al inicio.
+
+                    Mantén una conversación fluida y natural.
+                    Responde de manera clara y concisa, adaptada para una conversación telefónica.
+                    Usa un tono amable y profesional.
                     """,
                     "input_audio_format": "g711_ulaw",
                     "output_audio_format": "g711_ulaw",
@@ -656,7 +664,7 @@ class OpenAIClient:
             logging.error(f"Error manejando function call delta: {e}")
 
     def handle_function_call_done(self, ws, data):
-        """Maneja finalización de function call - EJECUTA LA FUNCIÓN"""
+        """Maneja finalización de function call - EJECUTA LA FUNCIÓN EN THREAD SEPARADO"""
         try:
             call_id = data.get('call_id', '')
             name = data.get('name', '')
@@ -672,19 +680,41 @@ class OpenAIClient:
                 logging.error(f"Error parseando argumentos: {arguments_str}")
                 arguments = {}
 
-            # Ejecutar la función
-            result = self.execute_function(name, arguments)
+            # EJECUTAR LA FUNCIÓN EN UN THREAD SEPARADO
+            # Esto evita bloquear el thread del WebSocket que maneja ping/pong
+            import threading
 
-            logging.info(f"   Resultado: {result}")
+            def execute_and_send():
+                """Ejecuta la función y envía el resultado - en thread separado"""
+                try:
+                    # Ejecutar la función (esto puede tomar 20-30 segundos)
+                    result = self.execute_function(name, arguments)
 
-            # Enviar resultado de vuelta a OpenAI
-            self.send_function_result(ws, call_id, result)
+                    logging.info(f"   Resultado: {result}")
 
-            # Incrementar métrica
-            self.metrics['function_calls'] += 1
+                    # Enviar resultado de vuelta a OpenAI
+                    self.send_function_result(ws, call_id, result)
 
-            # Resetear estado
-            self.current_function_call = None
+                    # Incrementar métrica
+                    self.metrics['function_calls'] += 1
+
+                    # Resetear estado
+                    self.current_function_call = None
+
+                except Exception as e:
+                    logging.error(f"Error ejecutando función en thread: {e}")
+                    # Enviar error a OpenAI
+                    error_result = {
+                        "error": str(e),
+                        "response": "Lo siento, ocurrió un error al procesar tu solicitud."
+                    }
+                    self.send_function_result(ws, call_id, error_result)
+
+            # Iniciar thread y retornar inmediatamente
+            # Esto permite que el WebSocket continúe procesando pings
+            thread = threading.Thread(target=execute_and_send, daemon=True)
+            thread.start()
+            logging.info(f"   ⚡ Función iniciada en thread separado (thread no bloqueará ping/pong)")
             self.function_call_id = None
             self.function_arguments_buffer = ""
 
@@ -707,7 +737,7 @@ class OpenAIClient:
             logging.error(f"Error manejando output item done: {e}")
 
     def execute_function(self, name: str, arguments: dict) -> dict:
-        """Ejecuta la función solicitada por OpenAI"""
+        """Ejecuta la función solicitada por OpenAI - SINCRÓNICO SIMPLE"""
         try:
             logging.info(f"⚙️ Ejecutando función: {name}")
 
@@ -732,11 +762,26 @@ class OpenAIClient:
                         "response": "Lo siento, el sistema de consultas no está disponible en este momento."
                     }
 
-                result = self.mikrotik_client.query(pregunta, timeout)
+                # EJECUTAR DIRECTAMENTE - FORMA SIMPLE
+                # IMPORTANTE: Confiar en que el ping_interval/ping_timeout del WebSocket
+                # mantendrá la conexión viva. La API de requests tiene su propio timeout.
+                try:
+                    start_time = time.time()
+                    result = self.mikrotik_client.query(pregunta, timeout)
+                    duration = time.time() - start_time
+                    logging.info(f"   ✓ Resultado obtenido en {duration:.1f}s (success: {result.get('success', False)})")
 
-                logging.info(f"   ✓ Resultado obtenido (success: {result.get('success', False)})")
+                    if result:
+                        logging.info(f"   Resultado: {result}")
 
-                return result
+                    return result
+
+                except Exception as e:
+                    logging.error(f"   ✗ Error en consulta: {e}")
+                    return {
+                        "error": str(e),
+                        "response": "Error al consultar la información. Por favor, intenta nuevamente."
+                    }
 
             else:
                 logging.error(f"Función desconocida: {name}")
