@@ -145,6 +145,14 @@ def reset_monthly_counters(connection):
         cursor.execute(update_query)
         rows_affected = cursor.rowcount
 
+        # F2: resetear el contador mensual de creditos de comunicaciones (usados_mes)
+        # para que el gate del dialer vea el cupo fresco al inicio del mes. Fail-safe.
+        try:
+            cursor.execute("UPDATE tenant_comms_account SET usados_mes = 0")
+            logging.info(f"   - tenant_comms_account.usados_mes reseteado ({cursor.rowcount} tenants)")
+        except Exception as _e:
+            logging.warning(f"   - no se pudo resetear usados_mes: {_e}")
+
         connection.commit()
 
         logging.info("=" * 70)

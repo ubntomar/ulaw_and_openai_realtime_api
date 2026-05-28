@@ -142,6 +142,11 @@ main() {
         log_message "🐍 EJECUTANDO: $active_path"
         python3 $active_path >> $HOME/outbound_calls.log 2>&1
         python_exit_code=$?
+
+        # F2: conciliar debitos de creditos de comunicaciones (idempotente,
+        # fail-open; no-op para tenants ilimitado como la casa). NUNCA afecta las llamadas.
+        log_message "Conciliando creditos de comunicaciones (debitos)..."
+        python3 /usr/local/asterisk/outbound_calls/conciliar_debitos_comms.py --apply >> $HOME/outbound_calls.log 2>&1 || log_message "WARN: conciliar_debitos_comms fallo (no afecta llamadas)"
         
         if [ $python_exit_code -eq 0 ]; then
             log_message "✅ Script Python ejecutado exitosamente"

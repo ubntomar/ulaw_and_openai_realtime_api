@@ -1004,11 +1004,15 @@ class CallManager:
             SELECT a.id, a.telefono, a.outbound_call_attempts, a.corte, a.cliente, a.apellido,
                    SUM(CASE WHEN f.cerrado = 0 THEN f.saldo ELSE 0 END) AS deuda_total
             FROM afiliados a
+            JOIN empresa e ON e.id = a.`id-empresa`
+            JOIN tenant_comms_account acc ON acc.`id-empresa` = a.`id-empresa`
             LEFT JOIN factura f ON a.id = f.`id-afiliado`
             WHERE a.outbound_call = 1 
             AND a.outbound_call_is_sent = 0
             AND a.activo = 1
             AND a.eliminar = 0
+            AND e.pais = 'CO'
+            AND ( acc.ilimitado = 1 OR (acc.feature_voz_activa = 1 AND (acc.saldo_creditos + GREATEST(acc.free_mensual - acc.usados_mes,0)) > 0) )
             GROUP BY a.id, a.telefono, a.outbound_call_attempts, a.corte
             HAVING deuda_total > 0
             ORDER BY a.id
