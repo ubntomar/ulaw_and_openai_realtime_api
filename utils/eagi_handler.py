@@ -713,9 +713,13 @@ class AsteriskApp:
     def __init__(self):
         """Inicializa la aplicación ARI con todos los componentes necesarios"""
         # Configuración de conexión ARI
-        self.base_url = 'http://localhost:8088/ari'
-        self.username = 'asterisk'
-        self.password = '<REDACTED>'
+        self.host = os.getenv('ASTERISK_HOST', 'localhost')
+        self.port = os.getenv('ASTERISK_PORT', '8088')
+        self.base_url = f'http://{self.host}:{self.port}/ari'
+        self.username = os.getenv('ASTERISK_USERNAME')
+        self.password = os.getenv('ASTERISK_PASSWORD')
+        if not self.username or not self.password:
+            raise RuntimeError("ASTERISK_USERNAME y ASTERISK_PASSWORD deben estar en el entorno")
         
         
         
@@ -1238,7 +1242,7 @@ class AsteriskApp:
         """
         try:
             # Construimos la URL del WebSocket con las credenciales
-            ws_url = f"ws://localhost:8088/ari/events?api_key={self.username}:{self.password}&app=openai-app"
+            ws_url = f"ws://{self.host}:{self.port}/ari/events?api_key={self.username}:{self.password}&app=openai-app"
             logging.info("Iniciando conexión ARI")
             
             # Bucle principal de reconexión
