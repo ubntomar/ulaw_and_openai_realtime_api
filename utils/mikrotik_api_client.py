@@ -148,12 +148,13 @@ class MikroTikAPIClient:
             "type": "function",
             "name": "consultar_mikrotik",
             "description": (
-                "Consulta información sobre routers MikroTik, clientes activos, "
-                "tráfico de red, interfaces, gateways y estado de la red. "
-                "Usa esta función cuando el usuario pregunte sobre: "
-                "clientes conectados, estado de routers, tráfico de red, "
-                "interfaces libres, gateways activos, o cualquier información "
-                "técnica de la infraestructura de red."
+                "Consulta información del proveedor de Internet. Incluye DOS tipos de consultas: "
+                "1) NEGOCIO: información de clientes, facturas, pagos pendientes, cortes de servicio, "
+                "planes contratados, historial de pagos, estado de cuenta. "
+                "2) TÉCNICO: routers MikroTik, clientes conectados en la red, tráfico, interfaces, gateways, "
+                "hacer ping a IPs de clientes para verificar conectividad, diagnóstico de red. "
+                "Usa esta función para CUALQUIER pregunta sobre clientes, facturación, "
+                "cortes, información técnica de red, o para hacer ping a IPs."
             ),
             "parameters": {
                 "type": "object",
@@ -161,8 +162,12 @@ class MikroTikAPIClient:
                     "pregunta": {
                         "type": "string",
                         "description": (
-                            "La pregunta del usuario en lenguaje natural sobre la red MikroTik. "
-                            "Ejemplos: '¿Cuántos clientes activos hay en router-146?', "
+                            "La pregunta del usuario en lenguaje natural. "
+                            "Ejemplos de NEGOCIO: '¿Cuál es el estado de cuenta del cliente Juan Pérez?', "
+                            "'¿Tiene facturas pendientes el cliente 12345?', "
+                            "'¿Está cortado el servicio de María García?', "
+                            "'¿Qué plan tiene contratado el cliente de la calle Principal 123?'. "
+                            "Ejemplos TÉCNICOS: '¿Cuántos clientes activos hay en router-146?', "
                             "'¿Qué routers están configurados?', "
                             "'¿Cuál es el tráfico de la interfaz WAN?'"
                         )
